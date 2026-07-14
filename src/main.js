@@ -103,7 +103,7 @@ function initClickHandler() {
 
       // Spawn floating cars within the water radius, passing ground elevation to avoid buildings
       debrisManager.spawnDebris(lat, lng, controls.currentRadius * 111, 15, waterRenderer.getGroundElevation());
-      
+
       // Spawn flags dynamically on the ground around the clicked area
       spawnFlags(lat, lng, controls.currentRadius * 111);
 
@@ -266,50 +266,79 @@ function showError(message) {
   `;
 }
 
-// ─── Dynamic Flags ───────────────────────────────────────────
+// ─── Dynamic Flags (OpenStreetMap) ───────────────────────────
 async function spawnFlags(originLat, originLng, radiusKm) {
+  // Clear old flags
   activeFlagEntities.forEach(f => viewer.entities.remove(f));
   activeFlagEntities = [];
 
-  const labels = ["Evacuation Route", "Critical Infrastructure", "Emergency Shelter", "Medical Center"];
-  const count = labels.length;
-  const cartographics = [];
+  const radiusMeters = radiusKm * 1000;
 
-  for (let i = 0; i < count; i++) {
-    // Spawn flags within the radius
-    const r = (Math.random() * 0.7 + 0.1) * radiusKm;
-    const theta = Math.random() * 2 * Math.PI;
-    const dLat = (r * Math.sin(theta)) / 111.0;
-    const dLng = (r * Math.cos(theta)) / (111.0 * Math.cos(originLat * Math.PI / 180));
-    cartographics.push(Cesium.Cartographic.fromDegrees(originLng + dLng, originLat + dLat));
-  }
+  // Overpass API Query for hospitals, fire stations, and schools in the radius
+  const query = `
+    [out:json];
+    (
+      node["amenity"="hospital"](around:${radiusMeters},${originLat},${originLng});
+      node["amenity"="fire_station"](around:${radiusMeters},${originLat},${originLng});
+      node["amenity"="school"](around:${radiusMeters},${originLat},${originLng});
+    );
+    out body 10; // Limit to 10 results so we don't spam the map
+  `;
 
   try {
+    const response = await fetch('https://overpass-api.de/api/interpreter', {
+      method: 'POST',
+      body: query
+    });
+    const data = await response.json();
+
+    if (!data.elements || data.elements.length === 0) {
+      console.log('[HydroViz] No critical infrastructure found in this radius.');
+      return;
+    }
+
+    const cartographics = [];
+    const elements = data.elements;
+
+    for (let i = 0; i < elements.length; i++) {
+      cartographics.push(Cesium.Cartographic.fromDegrees(elements[i].lon, elements[i].lat));
+    }
+
+    // Sample the precise ground/building height from the loaded 3D Tiles
     const sampled = await viewer.scene.sampleHeightMostDetailed(cartographics);
-    
+
     for (let i = 0; i < sampled.length; i++) {
       const carto = sampled[i];
+      const el = elements[i];
+
+      // Try to use the actual name, fallback to the amenity type
+      const name = el.tags.name || (el.tags.amenity.replace('_', ' ').toUpperCase());
+
       if (carto && carto.height !== undefined && !isNaN(carto.height)) {
         const flag = viewer.entities.add({
           position: Cesium.Cartesian3.fromRadians(carto.longitude, carto.latitude, carto.height),
-          name: labels[i],
-          description: `Location: ${labels[i]}`,
+          name: name,
+          description: `Facility Type: ${el.tags.amenity}`,
           model: {
             uri: './assets/models/flag.glb',
-            scale: 1.0,
+            scale: 2.0,
+            minimumPixelSize: 96,
+            maximumScale: 100.0,
             color: Cesium.Color.fromCssColorString('#ff4444'),
             colorBlendMode: Cesium.ColorBlendMode.MIX,
             colorBlendAmount: 0.5,
           },
           label: {
-            text: labels[i],
-            font: '14px Inter, sans-serif',
+            text: name,
+            font: 'bold 16px Inter, sans-serif',
             fillColor: Cesium.Color.WHITE,
+            showBackground: true,
+            backgroundColor: new Cesium.Color(0.7, 0.1, 0.1, 0.9),
             outlineColor: Cesium.Color.BLACK,
-            outlineWidth: 3,
-            style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+            outlineWidth: 2,
+            style: Cesium.LabelStyle.FILL,
             verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
-            pixelOffset: new Cesium.Cartesian2(0, -60),
+            pixelOffset: new Cesium.Cartesian2(0, -70),
             distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 100000),
             disableDepthTestDistance: Number.POSITIVE_INFINITY,
           },
@@ -317,8 +346,10 @@ async function spawnFlags(originLat, originLng, radiusKm) {
         activeFlagEntities.push(flag);
       }
     }
+
+    console.log(`[HydroViz] Spawned ${activeFlagEntities.length} real infrastructure flags.`);
   } catch (e) {
-    console.warn('[HydroViz] Failed to sample ground heights for flags:', e);
+    console.warn('[HydroViz] Failed to fetch or place flags:', e);
   }
 }
 
