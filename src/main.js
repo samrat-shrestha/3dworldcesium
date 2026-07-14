@@ -32,6 +32,7 @@ let clickHandler = null;
 let debrisManager = null;
 let currentLocation = LOCATIONS[0]; // French Quarter
 let currentViewPreset = 'aerial';
+let activeFlagEntities = []; // store dynamically spawned flags
 
 // ─── Boot ────────────────────────────────────────────────────
 async function boot() {
@@ -44,6 +45,7 @@ async function boot() {
     viewer = initViewer('cesiumContainer');
     await loadGoogleTiles(viewer);
 
+    // We will spawn flags dynamically on click instead of at boot
     elevationService = new ElevationService();
     waterRenderer = new WaterRenderer(viewer, elevationService);
     fpControls = new FirstPersonControls(viewer);
@@ -101,6 +103,9 @@ function initClickHandler() {
 
       // Spawn floating cars within the water radius, passing ground elevation to avoid buildings
       debrisManager.spawnDebris(lat, lng, controls.currentRadius * 111, 15, waterRenderer.getGroundElevation());
+      
+      // Spawn flags dynamically on the ground around the clicked area
+      spawnFlags(lat, lng, controls.currentRadius * 111);
 
       // Hide loading
       controls.setElevationLoading(false);
@@ -224,6 +229,8 @@ function initUI() {
     onClear: () => {
       waterRenderer.clear();
       debrisManager.clear();
+      activeFlagEntities.forEach(f => viewer.entities.remove(f));
+      activeFlagEntities = [];
       debrisManager.updateWaterLevel(Number.NEGATIVE_INFINITY);
       infoPanel.setWaterLevel(0);
       infoPanel.setFloodArea(0);
@@ -257,6 +264,62 @@ function showError(message) {
       </button>
     </div>
   `;
+}
+
+// ─── Dynamic Flags ───────────────────────────────────────────
+async function spawnFlags(originLat, originLng, radiusKm) {
+  activeFlagEntities.forEach(f => viewer.entities.remove(f));
+  activeFlagEntities = [];
+
+  const labels = ["Evacuation Route", "Critical Infrastructure", "Emergency Shelter", "Medical Center"];
+  const count = labels.length;
+  const cartographics = [];
+
+  for (let i = 0; i < count; i++) {
+    // Spawn flags within the radius
+    const r = (Math.random() * 0.7 + 0.1) * radiusKm;
+    const theta = Math.random() * 2 * Math.PI;
+    const dLat = (r * Math.sin(theta)) / 111.0;
+    const dLng = (r * Math.cos(theta)) / (111.0 * Math.cos(originLat * Math.PI / 180));
+    cartographics.push(Cesium.Cartographic.fromDegrees(originLng + dLng, originLat + dLat));
+  }
+
+  try {
+    const sampled = await viewer.scene.sampleHeightMostDetailed(cartographics);
+    
+    for (let i = 0; i < sampled.length; i++) {
+      const carto = sampled[i];
+      if (carto && carto.height !== undefined && !isNaN(carto.height)) {
+        const flag = viewer.entities.add({
+          position: Cesium.Cartesian3.fromRadians(carto.longitude, carto.latitude, carto.height),
+          name: labels[i],
+          description: `Location: ${labels[i]}`,
+          model: {
+            uri: './assets/models/flag.glb',
+            scale: 1.0,
+            color: Cesium.Color.fromCssColorString('#ff4444'),
+            colorBlendMode: Cesium.ColorBlendMode.MIX,
+            colorBlendAmount: 0.5,
+          },
+          label: {
+            text: labels[i],
+            font: '14px Inter, sans-serif',
+            fillColor: Cesium.Color.WHITE,
+            outlineColor: Cesium.Color.BLACK,
+            outlineWidth: 3,
+            style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+            verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+            pixelOffset: new Cesium.Cartesian2(0, -60),
+            distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 100000),
+            disableDepthTestDistance: Number.POSITIVE_INFINITY,
+          },
+        });
+        activeFlagEntities.push(flag);
+      }
+    }
+  } catch (e) {
+    console.warn('[HydroViz] Failed to sample ground heights for flags:', e);
+  }
 }
 
 // ─── Start ───────────────────────────────────────────────────

@@ -21,11 +21,11 @@ export class InfoPanel {
         </div>
         <div class="info-item">
           <span class="info-label">Water Level</span>
-          <span class="info-value accent" id="infoWaterLevel">0.0 m</span>
+          <span class="info-value accent" id="infoWaterLevel">0.0 ft</span>
         </div>
         <div class="info-item">
           <span class="info-label">Flood Area</span>
-          <span class="info-value" id="infoFloodArea">0.0 km²</span>
+          <span class="info-value" id="infoFloodArea">0.0 sq mi</span>
         </div>
         <div class="info-item full-width">
           <span class="info-label">Water Origin</span>
@@ -59,22 +59,26 @@ export class InfoPanel {
 
   setWaterLevel(level) {
     const el = document.getElementById('infoWaterLevel');
-    if (el) el.textContent = `${level.toFixed(1)} m`;
+    const levelFt = level / 0.3048;
+    if (el) el.textContent = `${levelFt.toFixed(1)} ft`;
   }
 
   setGroundElevation(elevation) {
     const el = document.getElementById('infoGroundElev');
-    if (el) el.textContent = elevation !== null ? `${elevation.toFixed(1)} m` : '—';
+    const elevFt = elevation !== null ? elevation / 0.3048 : null;
+    if (el) el.textContent = elevFt !== null ? `${elevFt.toFixed(1)} ft` : '—';
   }
 
   setWaterSurface(elevation) {
     const el = document.getElementById('infoWaterSurface');
-    if (el) el.textContent = elevation !== null ? `${elevation.toFixed(1)} m MSL` : '—';
+    const elevFt = elevation !== null ? elevation / 0.3048 : null;
+    if (el) el.textContent = elevFt !== null ? `${elevFt.toFixed(1)} ft MSL` : '—';
   }
 
   setFloodArea(area) {
     const el = document.getElementById('infoFloodArea');
-    if (el) el.textContent = `${area.toFixed(1)} km²`;
+    const areaSqMiles = area * 0.386102;
+    if (el) el.textContent = `${areaSqMiles.toFixed(1)} sq mi`;
   }
 
   setLocation(name) {
@@ -86,7 +90,8 @@ export class InfoPanel {
     const el = document.getElementById('infoOrigin');
     if (el) {
       if (origin) {
-        el.textContent = `${origin.lat.toFixed(5)}°, ${origin.lng.toFixed(5)}° · ${origin.elevation.toFixed(1)}m`;
+        const elevFt = origin.elevation / 0.3048;
+        el.textContent = `${origin.lat.toFixed(5)}°, ${origin.lng.toFixed(5)}° · ${elevFt.toFixed(1)}ft`;
       } else {
         el.textContent = 'Click map to set';
       }

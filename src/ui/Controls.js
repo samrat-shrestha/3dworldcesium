@@ -6,6 +6,9 @@ export const LOCATIONS = [
   { id: 'tulane', name: 'Tulane University', lng: -90.1209, lat: 29.9401 },
   { id: 'downtown', name: 'Downtown / CBD', lng: -90.0715, lat: 29.9511 },
   { id: 'lower9th', name: 'Lower 9th Ward', lng: -89.9935, lat: 29.9649 },
+  { id: 'levee_breach', name: 'Industrial Canal Breach', lng: -90.0267, lat: 29.9701 },
+  { id: 'holy_cross', name: 'Holy Cross', lng: -90.0125, lat: 29.9570 },
+  { id: 'fats_domino', name: 'Fats Domino House', lng: -90.0055, lat: 29.9631 },
   { id: 'garden', name: 'Garden District', lng: -90.0942, lat: 29.9282 },
   { id: 'lakeshore', name: 'Lake Pontchartrain Shore', lng: -90.0800, lat: 30.0250 },
   { id: 'canal', name: 'Canal Street', lng: -90.0690, lat: 29.9530 },
@@ -30,7 +33,7 @@ export class Controls {
     this.options = options;
     this.currentLocation = LOCATIONS[0];
     this.currentLevel = 0;
-    this.currentRadius = 0.004;
+    this.currentRadius = (0.5 * 1.60934) / 111;
     this.currentBoundary = 'circle';
     this.activeView = 'aerial';
     this.walkMode = false;
@@ -112,9 +115,9 @@ export class Controls {
         <div class="control-section">
           <div class="section-label">
             <span>Water Level Above Ground</span>
-            <span class="section-value" id="waterLevelDisplay">0.0 m</span>
+            <span class="section-value" id="waterLevelDisplay">0.0 ft</span>
           </div>
-          <input type="range" id="waterLevelSlider" min="0" max="20" step="0.5" value="0">
+          <input type="range" id="waterLevelSlider" min="0" max="60" step="0.5" value="0">
         </div>
 
         <!-- Water Surface -->
@@ -122,7 +125,7 @@ export class Controls {
           <div class="elevation-readout">
             <span class="readout-label">Water Surface: </span>
             <span class="readout-value" id="waterSurfaceValue">—</span>
-            <span class="readout-unit">m MSL</span>
+            <span class="readout-unit">ft MSL</span>
           </div>
         </div>
 
@@ -132,9 +135,9 @@ export class Controls {
         <div class="control-section">
           <div class="section-label">
             <span>Coverage Radius</span>
-            <span class="section-value" id="radiusDisplay">0.4 km</span>
+            <span class="section-value" id="radiusDisplay">0.5 mi</span>
           </div>
-          <input type="range" id="radiusSlider" min="0.002" max="0.04" step="0.001" value="0.004">
+          <input type="range" id="radiusSlider" min="0.1" max="10" step="0.1" value="0.5">
         </div>
 
         <div class="panel-divider"></div>
@@ -164,20 +167,22 @@ export class Controls {
     const waterSlider = document.getElementById('waterLevelSlider');
     const waterDisplay = document.getElementById('waterLevelDisplay');
     waterSlider.addEventListener('input', () => {
-      const level = parseFloat(waterSlider.value);
-      this.currentLevel = level;
-      waterDisplay.textContent = `${level.toFixed(1)} m`;
-      this.options.onWaterLevelChange(level);
+      const levelFt = parseFloat(waterSlider.value);
+      const levelMeters = levelFt * 0.3048;
+      this.currentLevel = levelMeters;
+      waterDisplay.textContent = `${levelFt.toFixed(1)} ft`;
+      this.options.onWaterLevelChange(levelMeters);
     });
 
     // Radius
     const radiusSlider = document.getElementById('radiusSlider');
     const radiusDisplay = document.getElementById('radiusDisplay');
     radiusSlider.addEventListener('input', () => {
-      const radius = parseFloat(radiusSlider.value);
-      this.currentRadius = radius;
-      radiusDisplay.textContent = `${(radius * 111).toFixed(1)} km`;
-      this.options.onRadiusChange(radius);
+      const radiusMiles = parseFloat(radiusSlider.value);
+      const radiusDegrees = (radiusMiles * 1.60934) / 111;
+      this.currentRadius = radiusDegrees;
+      radiusDisplay.textContent = `${radiusMiles.toFixed(1)} mi`;
+      this.options.onRadiusChange(radiusDegrees);
     });
 
     // Location
@@ -231,7 +236,7 @@ export class Controls {
     // Clear
     document.getElementById('btnClear').addEventListener('click', () => {
       waterSlider.value = 0;
-      waterDisplay.textContent = '0.0 m';
+      waterDisplay.textContent = '0.0 ft';
       this.currentLevel = 0;
       this.setWaterSurface(null);
       this.setOrigin(null);
@@ -241,22 +246,25 @@ export class Controls {
 
   // ─── Public setters ────────────────────────────────
 
-  setWaterLevelDisplay(level) {
+  setWaterLevelDisplay(levelMeters) {
     const d = document.getElementById('waterLevelDisplay');
     const s = document.getElementById('waterLevelSlider');
-    if (d) d.textContent = `${level.toFixed(1)} m`;
-    if (s) s.value = level;
-    this.currentLevel = level;
+    const levelFt = levelMeters / 0.3048;
+    if (d) d.textContent = `${levelFt.toFixed(1)} ft`;
+    if (s) s.value = levelFt;
+    this.currentLevel = levelMeters;
   }
 
   setGroundElevation(elevation) {
     const el = document.getElementById('originElevation');
-    if (el) el.textContent = elevation !== null ? `${elevation.toFixed(1)} m MSL` : '—';
+    const elevFt = elevation !== null ? elevation / 0.3048 : null;
+    if (el) el.textContent = elevFt !== null ? `${elevFt.toFixed(1)} ft MSL` : '—';
   }
 
   setWaterSurface(elevation) {
     const el = document.getElementById('waterSurfaceValue');
-    if (el) el.textContent = elevation !== null ? elevation.toFixed(1) : '—';
+    const elevFt = elevation !== null ? elevation / 0.3048 : null;
+    if (el) el.textContent = elevFt !== null ? elevFt.toFixed(1) : '—';
   }
 
   /**
@@ -273,7 +281,8 @@ export class Controls {
       display.style.display = 'block';
       instruction.textContent = 'Click elsewhere to move origin';
       coordsEl.textContent = `${origin.lat.toFixed(5)}°, ${origin.lng.toFixed(5)}°`;
-      elevEl.textContent = `${origin.elevation.toFixed(1)} m MSL`;
+      const elevFt = origin.elevation / 0.3048;
+      elevEl.textContent = `${elevFt.toFixed(1)} ft MSL`;
     } else {
       display.style.display = 'none';
       instruction.textContent = 'Click on the map to place water origin';
