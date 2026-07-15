@@ -16,8 +16,7 @@ const USGS_DIRECT_URL = 'https://epqs.nationalmap.gov/v1/json';
 
 const GOOGLE_PROXY_URL = '/api/google-elevation/maps/api/elevation/json';
 const GOOGLE_DIRECT_URL = 'https://maps.googleapis.com/maps/api/elevation/json';
-
-const GOOGLE_ELEVATION_API_KEY = 'AIzaSyA6A821SVHUtMukcDMnZK7OXSw8MxwTGck';
+const GOOGLE_ELEVATION_API_KEY = import.meta.env.VITE_GOOGLE_ELEVATION_API_KEY || '';
 
 export class ElevationService {
   constructor() {

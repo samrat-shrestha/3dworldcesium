@@ -77,28 +77,29 @@ export class Controls {
 
         <div class="panel-divider"></div>
 
-        <!-- Camera -->
+        <!-- Camera & Navigation -->
         <div class="control-section">
-          <div class="section-label">Camera View</div>
+          <div class="section-label">
+            Camera & Navigation
+            <div class="info-icon-container">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"></circle>
+                <line x1="12" y1="16" x2="12" y2="12"></line>
+                <line x1="12" y1="8" x2="12.01" y2="8"></line>
+              </svg>
+              <div class="info-tooltip" style="width: 220px;">
+                <div style="font-weight: 600; color: var(--text-primary); margin-bottom: 2px;">Orbit / Aerial</div>
+                <div class="tooltip-hint">Left drag — Rotate</div>
+                <div class="tooltip-hint">Right drag — Zoom</div>
+                <div class="tooltip-hint">Middle drag — Tilt</div>
+                <div class="tooltip-hint">Scroll — Zoom in/out</div>
+              </div>
+            </div>
+          </div>
           <div class="view-presets">
             <button class="view-btn active" data-view="aerial">Aerial</button>
             <button class="view-btn" data-view="street">Street</button>
             <button class="view-btn" data-view="orbit">Overview</button>
-          </div>
-        </div>
-
-        <!-- Walk Mode -->
-        <div class="control-section" style="margin-top: 6px;">
-          <button id="btnWalk" class="btn btn-walk">
-            <span id="walkIcon">⊙</span> Walk Mode
-          </button>
-          <div id="walkHints" class="walk-hints" style="display: none;">
-            <div class="walk-hint">W/S — Forward / Back</div>
-            <div class="walk-hint">A/D — Strafe left / right</div>
-            <div class="walk-hint">Q/E — Up / Down</div>
-            <div class="walk-hint">Arrow keys — Look around</div>
-            <div class="walk-hint">Right drag — Look (mouse)</div>
-            <div class="walk-hint">Shift — Sprint</div>
           </div>
         </div>
 
@@ -121,54 +122,48 @@ export class Controls {
           </div>
         </div>
 
-        <div class="panel-divider"></div>
+        <div id="waterControlsContainer" class="water-controls-wrapper">
+          <div class="water-controls-inner">
+            <div class="panel-divider"></div>
 
-        <!-- Water Level -->
-        <div class="control-section">
-          <div class="section-label">
-            <span>Water Level Above Ground</span>
-            <span class="section-value" id="waterLevelDisplay">0.0 ft</span>
+            <!-- Water Level -->
+            <div class="control-section">
+              <div class="section-label">
+                <span>Water Level Above Ground</span>
+                <span class="section-value" id="waterLevelDisplay">0.0 ft</span>
+              </div>
+              <input type="range" id="waterLevelSlider" min="0" max="60" step="0.5" value="0">
+            </div>
+
+            <!-- Water Surface -->
+            <div class="control-section">
+              <div class="elevation-readout">
+                <span class="readout-label">Water Surface: </span>
+                <span class="readout-value" id="waterSurfaceValue">—</span>
+                <span class="readout-unit">ft MSL</span>
+              </div>
+            </div>
+
+            <div class="panel-divider"></div>
+
+            <!-- Radius -->
+            <div class="control-section">
+              <div class="section-label">
+                <span>Region Size</span>
+                <span class="section-value" id="radiusDisplay">0.5 mi</span>
+              </div>
+              <input type="range" id="radiusSlider" min="0.1" max="10" step="0.1" value="0.5">
+            </div>
+
+            <div class="panel-divider"></div>
+
+            <!-- Actions -->
+            <div class="control-section">
+              <button id="btnClear" class="btn btn-danger">
+                Clear Water
+              </button>
+            </div>
           </div>
-          <input type="range" id="waterLevelSlider" min="0" max="60" step="0.5" value="0">
-        </div>
-
-        <!-- Water Surface -->
-        <div class="control-section">
-          <div class="elevation-readout">
-            <span class="readout-label">Water Surface: </span>
-            <span class="readout-value" id="waterSurfaceValue">—</span>
-            <span class="readout-unit">ft MSL</span>
-          </div>
-        </div>
-
-        <div class="panel-divider"></div>
-
-        <!-- Radius -->
-        <div class="control-section">
-          <div class="section-label">
-            <span>Region Size</span>
-            <span class="section-value" id="radiusDisplay">0.5 mi</span>
-          </div>
-          <input type="range" id="radiusSlider" min="0.1" max="10" step="0.1" value="0.5">
-        </div>
-
-        <div class="panel-divider"></div>
-
-        <!-- Actions -->
-        <div class="control-section">
-          <button id="btnClear" class="btn btn-danger">
-            Clear Water
-          </button>
-        </div>
-
-        <div class="panel-divider"></div>
-
-        <!-- Nav Help (orbit mode) -->
-        <div id="orbitHints" class="nav-help">
-          <div class="nav-hint">Left drag — Rotate</div>
-          <div class="nav-hint">Right drag — Zoom</div>
-          <div class="nav-hint">Middle drag — Tilt</div>
-          <div class="nav-hint">Scroll — Zoom in/out</div>
         </div>
       </div>
     `;
@@ -232,28 +227,7 @@ export class Controls {
       });
     });
 
-    // Walk mode toggle
-    document.getElementById('btnWalk').addEventListener('click', () => {
-      this.walkMode = !this.walkMode;
-      const btn = document.getElementById('btnWalk');
-      const hints = document.getElementById('walkHints');
-      const orbitHints = document.getElementById('orbitHints');
-      const icon = document.getElementById('walkIcon');
 
-      if (this.walkMode) {
-        btn.classList.add('active');
-        hints.style.display = 'block';
-        orbitHints.style.display = 'none';
-        icon.textContent = '●';
-      } else {
-        btn.classList.remove('active');
-        hints.style.display = 'none';
-        orbitHints.style.display = 'block';
-        icon.textContent = '⊙';
-      }
-
-      if (this.options.onWalkToggle) this.options.onWalkToggle(this.walkMode);
-    });
 
     // Clear
     document.getElementById('btnClear').addEventListener('click', () => {
@@ -298,15 +272,18 @@ export class Controls {
     const instruction = document.getElementById('clickInstruction');
     const coordsEl = document.getElementById('originCoords');
     const elevEl = document.getElementById('originElevation');
+    const waterContainer = document.getElementById('waterControlsContainer');
 
     if (origin) {
       display.style.display = 'block';
+      if (waterContainer) waterContainer.classList.add('visible');
       instruction.textContent = 'Click elsewhere to move origin';
       coordsEl.textContent = `${origin.lat.toFixed(5)}°, ${origin.lng.toFixed(5)}°`;
       const elevFt = origin.elevation / 0.3048;
       elevEl.textContent = `${elevFt.toFixed(1)} ft MSL`;
     } else {
       display.style.display = 'none';
+      if (waterContainer) waterContainer.classList.remove('visible');
       instruction.textContent = 'Click on the map to place water origin';
       coordsEl.textContent = '—';
       elevEl.textContent = '—';

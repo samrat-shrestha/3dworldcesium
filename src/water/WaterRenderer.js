@@ -119,7 +119,7 @@ export class WaterRenderer {
 
     // Fetch DEM grid for flood fill
     console.log('[WaterRenderer] Fetching DEM grid for flood fill...');
-    this.demData = await this.elevationService.getElevationGrid(lat, lng, radius, 40);
+    this.demData = await this.elevationService.getElevationGrid(lat, lng, radius, 60);
     this.demRadius = radius;
     if (this.demData) {
       // Align the DEM grid with our exact pinpoint ground elevation

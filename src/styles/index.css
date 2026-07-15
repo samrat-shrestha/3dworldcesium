@@ -283,6 +283,27 @@ body {
   font-size: 0.72rem;
 }
 
+/* Smooth auto-height animation */
+.water-controls-wrapper {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition: grid-template-rows 0.4s cubic-bezier(0.4, 0, 0.2, 1), 
+              opacity 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  overflow: hidden;
+}
+
+.water-controls-wrapper.visible {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+
+.water-controls-inner {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 /* Elevation readout */
 .elevation-readout {
   display: flex;
@@ -478,15 +499,58 @@ input[type="range"]::-moz-range-track {
   color: var(--accent);
 }
 
-/* Navigation help */
-.nav-help {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
+/* Tooltip / Info Icon */
+.info-icon-container {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+  cursor: help;
+  position: relative;
+  margin-left: 6px;
 }
 
-.nav-hint {
-  font-size: 0.62rem;
+.info-icon-container svg {
+  width: 14px;
+  height: 14px;
+  opacity: 0.8;
+  transition: opacity 0.2s, color 0.2s;
+}
+
+.info-icon-container:hover svg {
+  opacity: 1;
+  color: var(--accent);
+}
+
+.info-tooltip {
+  display: none;
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  margin-top: 8px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  width: 180px;
+  z-index: 2000;
+  box-shadow: var(--shadow-panel);
+  text-align: left;
+  font-style: normal;
+  font-weight: normal;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.info-icon-container:hover .info-tooltip {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.tooltip-hint {
+  font-size: 0.65rem;
   color: var(--text-muted);
   line-height: 1.4;
 }
@@ -519,20 +583,7 @@ input[type="range"]::-moz-range-track {
   color: var(--accent);
 }
 
-/* Walk hints */
-.walk-hints {
-  margin-top: 6px;
-  padding: 6px 8px;
-  background: var(--bg-input);
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border);
-}
-
-.walk-hint {
-  font-size: 0.62rem;
-  color: var(--text-muted);
-  line-height: 1.5;
-}
+/* Walk mode button */
 
 /* Click instruction */
 .click-instruction {
