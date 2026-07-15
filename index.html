@@ -1,17 +1,21 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>HydroViz 3D — Interactive Flood Simulation</title>
-    <meta name="description" content="Explore interactive 3D flood simulations on photorealistic terrain. Visualize water levels, storm surge, and flood scenarios for cities across the United States.">
+    <meta name="description"
+        content="Explore interactive 3D flood simulations on photorealistic terrain. Visualize water levels, storm surge, and flood scenarios for cities across the United States.">
     <meta name="keywords" content="flood simulation, 3D visualization, CesiumJS, hydrology, water level, storm surge">
     <meta name="author" content="HydroViz 3D">
     <meta name="theme-color" content="#0a0e1a">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap"
+        rel="stylesheet">
 </head>
+
 <body>
     <div id="cesiumContainer"></div>
 
@@ -23,8 +27,10 @@
             <p class="modal-subtitle">Interactive Flood Simulation on Photorealistic 3D Terrain</p>
             <div class="modal-divider"></div>
             <label for="tokenInput" class="modal-label">Cesium Ion Access Token</label>
-            <p class="modal-hint">Get your free token at <a href="https://cesium.com/ion/tokens" target="_blank" rel="noopener">cesium.com/ion/tokens</a></p>
-            <input type="text" id="tokenInput" class="modal-input" placeholder="eyJhbGciOi..." autocomplete="off" spellcheck="false">
+            <p class="modal-hint">Get your free token at <a href="https://cesium.com/ion/tokens" target="_blank"
+                    rel="noopener">cesium.com/ion/tokens</a></p>
+            <input type="text" id="tokenInput" class="modal-input" placeholder="eyJhbGciOi..." autocomplete="off"
+                spellcheck="false">
             <button id="tokenSubmit" class="modal-btn">Launch HydroViz 3D →</button>
             <p class="modal-footer">Your token is stored locally and never sent to our servers.</p>
         </div>
@@ -44,10 +50,10 @@
 
     <!-- Brand Badge -->
     <div id="brandBadge" class="brand-badge" style="display:none;">
-        <span class="brand-icon">🌊</span>
         <span class="brand-text">HydroViz 3D</span>
     </div>
 
     <script type="module" src="./src/main.js"></script>
 </body>
+
 </html>

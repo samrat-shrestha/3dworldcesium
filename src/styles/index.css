@@ -13,9 +13,9 @@
   --accent: #5b9bd5;
   --accent-dim: rgba(91, 155, 213, 0.15);
 
-  --text-primary: #e2e4e8;
-  --text-secondary: #8b8f98;
-  --text-muted: #acb6c6;
+  --text-primary: #ffffff;
+  --text-secondary: #ffffff;
+  --text-muted: #f0f0f0;
 
   --border: rgba(255, 255, 255, 0.08);
   --border-focus: rgba(91, 155, 213, 0.4);

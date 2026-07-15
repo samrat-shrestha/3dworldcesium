@@ -98,8 +98,8 @@ function initClickHandler() {
       controls.setElevationLoading(true);
       waterRenderer.clearWaterOnly();
 
-      // Async: fetches USGS bare-earth elevation + calibrates geoid
-      await waterRenderer.setOrigin(lat, lng, clickedElevation);
+      // Async: fetches bare-earth elevation + calibrates geoid + fetches DEM grid
+      await waterRenderer.setOrigin(lat, lng, clickedElevation, controls.currentRadius);
 
       // Spawn floating cars within the water radius, passing ground elevation to avoid buildings
       debrisManager.spawnDebris(lat, lng, controls.currentRadius * 111, 15, waterRenderer.getGroundElevation());
@@ -119,9 +119,9 @@ function initClickHandler() {
       infoPanel.setOrigin(origin);
       infoPanel.setGroundElevation(groundNavd88);
 
-      // If water level is already set, render water at new origin
+      // If water level is already set, animate water spreading from new origin
       if (controls.currentLevel > 0) {
-        waterRenderer.updateWater(controls.currentLevel, controls.currentRadius);
+        waterRenderer.animateFloodFill(controls.currentLevel, controls.currentRadius);
         const surfaceNavd88 = waterRenderer.getWaterSurfaceNavd88();
         controls.setWaterSurface(surfaceNavd88);
         infoPanel.setWaterSurface(surfaceNavd88);
@@ -133,9 +133,15 @@ function initClickHandler() {
   }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
 }
 
-// ─── UI Setup ────────────────────────────────────────────────
 function initUI() {
   controls = new Controls({
+    onProviderChange: (provider) => {
+      elevationService.provider = provider;
+      // Clear the map so the user clicks again to fetch new elevation
+      const clearBtn = document.getElementById('btnClear');
+      if (clearBtn) clearBtn.click();
+    },
+
     onWaterLevelChange: (level) => {
       if (!waterRenderer.hasOrigin()) return;
       waterRenderer.updateWater(level, controls.currentRadius);
@@ -266,42 +272,47 @@ function showError(message) {
   `;
 }
 
-// ─── Dynamic Flags (OpenStreetMap) ───────────────────────────
+// ─── Dynamic Flags (Google Places API) ───────────────────────
+const GOOGLE_PLACES_API_KEY = 'AIzaSyA6A821SVHUtMukcDMnZK7OXSw8MxwTGck';
+
 async function spawnFlags(originLat, originLng, radiusKm) {
   // Clear old flags
   activeFlagEntities.forEach(f => viewer.entities.remove(f));
   activeFlagEntities = [];
 
   const radiusMeters = radiusKm * 1000;
-
-  // Overpass API Query for hospitals, fire stations, and schools in the radius
-  const query = `
-    [out:json];
-    (
-      node["amenity"="hospital"](around:${radiusMeters},${originLat},${originLng});
-      node["amenity"="fire_station"](around:${radiusMeters},${originLat},${originLng});
-      node["amenity"="school"](around:${radiusMeters},${originLat},${originLng});
-    );
-    out body 10; // Limit to 10 results so we don't spam the map
-  `;
+  const types = ['hospital', 'fire_station', 'school'];
+  const baseUrl = import.meta.env.DEV 
+    ? '/api/google-places/maps/api/place/nearbysearch/json' 
+    : 'https://hydroinformatics.tulane.edu/lab/cors/https://maps.googleapis.com/maps/api/place/nearbysearch/json';
 
   try {
-    const response = await fetch('https://overpass-api.de/api/interpreter', {
-      method: 'POST',
-      body: query
-    });
-    const data = await response.json();
+    const fetchPromises = types.map(type => 
+      fetch(`${baseUrl}?location=${originLat},${originLng}&radius=${radiusMeters}&type=${type}&key=${GOOGLE_PLACES_API_KEY}`)
+        .then(res => res.json())
+    );
 
-    if (!data.elements || data.elements.length === 0) {
+    const responses = await Promise.all(fetchPromises);
+    
+    let allResults = [];
+    responses.forEach(data => {
+      if (data.status === 'OK' && data.results) {
+        allResults.push(...data.results);
+      }
+    });
+
+    if (allResults.length === 0) {
       console.log('[HydroViz] No critical infrastructure found in this radius.');
       return;
     }
 
-    const cartographics = [];
-    const elements = data.elements;
+    // Limit to 10 to not spam the map
+    allResults = allResults.slice(0, 10);
 
-    for (let i = 0; i < elements.length; i++) {
-      cartographics.push(Cesium.Cartographic.fromDegrees(elements[i].lon, elements[i].lat));
+    const cartographics = [];
+    for (let i = 0; i < allResults.length; i++) {
+      const loc = allResults[i].geometry.location;
+      cartographics.push(Cesium.Cartographic.fromDegrees(loc.lng, loc.lat));
     }
 
     // Sample the precise ground/building height from the loaded 3D Tiles
@@ -309,16 +320,16 @@ async function spawnFlags(originLat, originLng, radiusKm) {
 
     for (let i = 0; i < sampled.length; i++) {
       const carto = sampled[i];
-      const el = elements[i];
+      const result = allResults[i];
 
-      // Try to use the actual name, fallback to the amenity type
-      const name = el.tags.name || (el.tags.amenity.replace('_', ' ').toUpperCase());
+      const name = result.name || 'FACILITY';
+      const typeLabel = result.types ? result.types[0].replace('_', ' ').toUpperCase() : 'INFRASTRUCTURE';
 
       if (carto && carto.height !== undefined && !isNaN(carto.height)) {
         const flag = viewer.entities.add({
           position: Cesium.Cartesian3.fromRadians(carto.longitude, carto.latitude, carto.height),
           name: name,
-          description: `Facility Type: ${el.tags.amenity}`,
+          description: `Facility Type: ${typeLabel}`,
           model: {
             uri: './assets/models/flag.glb',
             scale: 2.0,

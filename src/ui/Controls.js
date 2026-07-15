@@ -28,6 +28,7 @@ export class Controls {
    * @param {Function} options.onAnimate
    * @param {Function} options.onClear
    * @param {Function} options.onWalkToggle
+   * @param {Function} options.onProviderChange
    */
   constructor(options) {
     this.options = options;
@@ -61,6 +62,17 @@ export class Controls {
           <button id="btnFlyTo" class="btn btn-primary" style="margin-top: 6px;">
             Go To Location
           </button>
+        </div>
+
+        <div class="panel-divider"></div>
+
+        <!-- Elevation Provider -->
+        <div class="control-section">
+          <div class="section-label">Elevation Provider</div>
+          <select id="providerSelect" class="styled-select">
+            <option value="google" selected>Google Elevation</option>
+            <option value="usgs">USGS 3DEP</option>
+          </select>
         </div>
 
         <div class="panel-divider"></div>
@@ -134,7 +146,7 @@ export class Controls {
         <!-- Radius -->
         <div class="control-section">
           <div class="section-label">
-            <span>Coverage Radius</span>
+            <span>Region Size</span>
             <span class="section-value" id="radiusDisplay">0.5 mi</span>
           </div>
           <input type="range" id="radiusSlider" min="0.1" max="10" step="0.1" value="0.5">
@@ -193,6 +205,16 @@ export class Controls {
         this.currentLocation = loc;
       }
     });
+
+    // Elevation Provider
+    const providerSelect = document.getElementById('providerSelect');
+    if (providerSelect) {
+      providerSelect.addEventListener('change', () => {
+        if (this.options.onProviderChange) {
+          this.options.onProviderChange(providerSelect.value);
+        }
+      });
+    }
 
     // Fly To
     document.getElementById('btnFlyTo').addEventListener('click', () => {

@@ -16,6 +16,18 @@ export default defineConfig({
         rewrite: (path) => path.replace(/^\/api\/usgs-elevation/, ''),
         secure: true,
       },
+      '/api/google-elevation': {
+        target: 'https://maps.googleapis.com',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api\/google-elevation/, ''),
+        secure: true,
+      },
+      '/api/google-places': {
+        target: 'https://maps.googleapis.com',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api\/google-places/, ''),
+        secure: true,
+      },
     },
   },
   build: {
