@@ -379,6 +379,32 @@ input[type="range"]::-moz-range-track {
   border-radius: 2px;
 }
 
+/* Disabled range slider */
+input[type="range"]:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+input[type="range"]:disabled::-webkit-slider-thumb {
+  background: #666;
+  border-color: #555;
+  cursor: not-allowed;
+}
+
+input[type="range"]:disabled::-moz-range-thumb {
+  background: #666;
+  border-color: #555;
+  cursor: not-allowed;
+}
+
+/* Disabled control section (dims label + slider together) */
+.control-section.disabled {
+  opacity: 0.35;
+  pointer-events: none;
+  transition: opacity 0.3s ease;
+}
+
 /* Select */
 .styled-select {
   width: 100%;

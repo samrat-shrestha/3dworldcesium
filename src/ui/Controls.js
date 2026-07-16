@@ -34,7 +34,7 @@ export class Controls {
     this.options = options;
     this.currentLocation = LOCATIONS[0];
     this.currentLevel = 0;
-    this.currentRadius = (0.5 * 1.60934) / 111;
+    this.currentRadius = (0.5 / 2 * 1.60934) / 111; // 0.5 mi diameter → 0.25 mi radius in degrees
     this.currentBoundary = 'circle';
     this.activeView = 'aerial';
     this.walkMode = false;
@@ -122,6 +122,17 @@ export class Controls {
           </div>
         </div>
 
+        <div class="panel-divider"></div>
+
+        <!-- Region Size (always visible) -->
+        <div class="control-section">
+          <div class="section-label">
+            <span>Region Size</span>
+            <span class="section-value" id="radiusDisplay">0.5 mi</span>
+          </div>
+          <input type="range" id="radiusSlider" min="0.1" max="10" step="0.1" value="0.5">
+        </div>
+
         <div id="waterControlsContainer" class="water-controls-wrapper">
           <div class="water-controls-inner">
             <div class="panel-divider"></div>
@@ -142,17 +153,6 @@ export class Controls {
                 <span class="readout-value" id="waterSurfaceValue">—</span>
                 <span class="readout-unit">ft MSL</span>
               </div>
-            </div>
-
-            <div class="panel-divider"></div>
-
-            <!-- Radius -->
-            <div class="control-section">
-              <div class="section-label">
-                <span>Region Size</span>
-                <span class="section-value" id="radiusDisplay">0.5 mi</span>
-              </div>
-              <input type="range" id="radiusSlider" min="0.1" max="10" step="0.1" value="0.5">
             </div>
 
             <div class="panel-divider"></div>
@@ -185,10 +185,11 @@ export class Controls {
     const radiusSlider = document.getElementById('radiusSlider');
     const radiusDisplay = document.getElementById('radiusDisplay');
     radiusSlider.addEventListener('input', () => {
-      const radiusMiles = parseFloat(radiusSlider.value);
+      const sizeMiles = parseFloat(radiusSlider.value);
+      const radiusMiles = sizeMiles / 2;
       const radiusDegrees = (radiusMiles * 1.60934) / 111;
       this.currentRadius = radiusDegrees;
-      radiusDisplay.textContent = `${radiusMiles.toFixed(1)} mi`;
+      radiusDisplay.textContent = `${sizeMiles.toFixed(1)} mi`;
       this.options.onRadiusChange(radiusDegrees);
     });
 
@@ -273,6 +274,7 @@ export class Controls {
     const coordsEl = document.getElementById('originCoords');
     const elevEl = document.getElementById('originElevation');
     const waterContainer = document.getElementById('waterControlsContainer');
+    const radiusSlider = document.getElementById('radiusSlider');
 
     if (origin) {
       display.style.display = 'block';
@@ -281,12 +283,22 @@ export class Controls {
       coordsEl.textContent = `${origin.lat.toFixed(5)}°, ${origin.lng.toFixed(5)}°`;
       const elevFt = origin.elevation / 0.3048;
       elevEl.textContent = `${elevFt.toFixed(1)} ft MSL`;
+      // Lock region size — DEM grid is fetched for this radius
+      if (radiusSlider) {
+        radiusSlider.disabled = true;
+        radiusSlider.closest('.control-section')?.classList.add('disabled');
+      }
     } else {
       display.style.display = 'none';
       if (waterContainer) waterContainer.classList.remove('visible');
       instruction.textContent = 'Click on the map to place water origin';
       coordsEl.textContent = '—';
       elevEl.textContent = '—';
+      // Unlock region size for next placement
+      if (radiusSlider) {
+        radiusSlider.disabled = false;
+        radiusSlider.closest('.control-section')?.classList.remove('disabled');
+      }
     }
   }
 

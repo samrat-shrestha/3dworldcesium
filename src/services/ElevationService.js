@@ -156,7 +156,9 @@ export class ElevationService {
   async getElevationGrid(lat, lng, radiusDeg, gridSize = 20) {
     try {
       const cellSizeLat = (2 * radiusDeg) / gridSize;
-      const cellSizeLng = (2 * radiusDeg) / gridSize;
+      // Adjust longitude cell size for latitude — 1° lng is shorter at higher latitudes
+      const cosLat = Math.cos(lat * Math.PI / 180);
+      const cellSizeLng = cellSizeLat / (cosLat || 1);
       const halfGrid = Math.floor(gridSize / 2);
 
       // Generate all grid points

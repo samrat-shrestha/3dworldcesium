@@ -25,6 +25,8 @@ export class WaterRenderer {
 
     this.waterPrimitive = null;
     this.markerEntity = null;
+    this.boundaryEntity = null;
+    this._previewEntities = null;
 
     // Origin (set by click)
     this.originLat = null;
@@ -36,7 +38,7 @@ export class WaterRenderer {
 
     // Current water params
     this.currentLevel = 0;
-    this.currentRadius = 0.008;
+    this.currentRadius = 0.00362; // 0.25 mi radius in degrees (0.5 mi diameter)
     this.animationId = null;
 
     // DEM grid cache for flood fill
@@ -53,9 +55,9 @@ export class WaterRenderer {
    * @param {number} lat
    * @param {number} lng
    * @param {number} clickedElevation - Ellipsoid height from pickPosition
-   * @param {number} [radius=0.008] - Current coverage radius in degrees
+   * @param {number} [radius=0.00362] - Current coverage radius in degrees
    */
-  async setOrigin(lat, lng, clickedElevation, radius = 0.008) {
+  async setOrigin(lat, lng, clickedElevation, radius = 0.00362) {
     this.originLat = lat;
     this.originLng = lng;
 
@@ -142,14 +144,18 @@ export class WaterRenderer {
     }
 
     this._hasAnimatedForCurrentOrigin = false;
+
+    // Replace preview with the active DEM grid boundary
+    this.removePreviewRegion();
+    this.showBoundary(lat, lng, radius);
   }
 
   /**
    * Update the water surface.
    * @param {number} waterLevelAboveGround - Meters above ground
-   * @param {number} [radius=0.008]
+   * @param {number} [radius=0.00362]
    */
-  updateWater(waterLevelAboveGround, radius = 0.008) {
+  updateWater(waterLevelAboveGround, radius = 0.00362) {
     this.currentLevel = waterLevelAboveGround;
     this.currentRadius = radius;
 
@@ -396,12 +402,13 @@ export class WaterRenderer {
   }
 
   _createCircularPolygon(lat, lng, radius, segments) {
+    const cosLat = Math.cos(lat * Math.PI / 180);
     const positions = [];
     for (let i = 0; i < segments; i++) {
       const angle = (i / segments) * Math.PI * 2;
       positions.push(Cesium.Cartesian3.fromDegrees(
-        lng + radius * Math.cos(angle),
-        lat + radius * 0.75 * Math.sin(angle)
+        lng + (radius / (cosLat || 1)) * Math.cos(angle),
+        lat + radius * Math.sin(angle)
       ));
     }
     return positions;
@@ -477,6 +484,8 @@ export class WaterRenderer {
     this.demData = null;
     this.demRadius = null;
     this._hasAnimatedForCurrentOrigin = false;
+    this.removeBoundary();
+    this.removePreviewRegion();
   }
 
   clearWaterOnly() {
@@ -521,5 +530,153 @@ export class WaterRenderer {
     // Fallback: circular estimate
     const radiusKm = this.currentRadius * 111;
     return Math.PI * radiusKm * (radiusKm * 0.75);
+  }
+
+  // ─── Boundary Outline ───────────────────────────────────────
+
+  /**
+   * Show the active DEM grid boundary as a solid blue outline.
+   * Displayed after the user clicks and the DEM grid is fetched.
+   *
+   * @param {number} lat - Center latitude
+   * @param {number} lng - Center longitude
+   * @param {number} radiusDeg - Radius in degrees (half the region size)
+   */
+  showBoundary(lat, lng, radiusDeg) {
+    this.removeBoundary();
+
+    const cosLat = Math.cos(lat * Math.PI / 180);
+    const halfLng = radiusDeg / (cosLat || 1);
+
+    const positions = Cesium.Cartesian3.fromDegreesArray([
+      lng - halfLng, lat - radiusDeg,
+      lng + halfLng, lat - radiusDeg,
+      lng + halfLng, lat + radiusDeg,
+      lng - halfLng, lat + radiusDeg,
+      lng - halfLng, lat - radiusDeg,
+    ]);
+
+    this.boundaryEntity = this.viewer.entities.add({
+      polyline: {
+        positions,
+        width: 2,
+        material: Cesium.Color.fromCssColorString('rgba(74, 144, 217, 0.8)'),
+        clampToGround: true,
+      },
+    });
+  }
+
+  /**
+   * Remove the active boundary outline from the map.
+   */
+  removeBoundary() {
+    if (this.boundaryEntity) {
+      this.viewer.entities.remove(this.boundaryEntity);
+      this.boundaryEntity = null;
+    }
+  }
+
+  // ─── Preview Region (mesh overlay) ─────────────────────────
+
+  /**
+   * Show a semi-transparent mesh/grid overlay indicating the region size.
+   * Uses a filled rectangle + cross-hatch polyline grid for a mesh look.
+   * Used as a preview before the user clicks to set an origin.
+   *
+   * @param {number} lat - Center latitude
+   * @param {number} lng - Center longitude
+   * @param {number} radiusDeg - Radius in degrees (half the region size)
+   */
+  showPreviewRegion(lat, lng, radiusDeg) {
+    this.removePreviewRegion();
+
+    const cosLat = Math.cos(lat * Math.PI / 180);
+    const halfLng = radiusDeg / (cosLat || 1);
+
+    const west = lng - halfLng;
+    const east = lng + halfLng;
+    const south = lat - radiusDeg;
+    const north = lat + radiusDeg;
+
+    const netColor = new Cesium.Color(1.0, 0.2, 0.2, 1.0);     // bright red, fully opaque
+    const borderColor = new Cesium.Color(1.0, 0.1, 0.1, 1.0);   // bold red, fully opaque
+    this._previewEntities = [];
+
+    // Visible red fill overlay
+    this._previewEntities.push(this.viewer.entities.add({
+      rectangle: {
+        coordinates: Cesium.Rectangle.fromDegrees(west, south, east, north),
+        material: new Cesium.Color(1.0, 0.15, 0.15, 0.25),
+        classificationType: Cesium.ClassificationType.BOTH,
+      },
+    }));
+
+    // Thick bold border
+    this._previewEntities.push(this.viewer.entities.add({
+      polyline: {
+        positions: Cesium.Cartesian3.fromDegreesArray([
+          west, south, east, south, east, north, west, north, west, south,
+        ]),
+        width: 5,
+        material: borderColor,
+        clampToGround: true,
+      },
+    }));
+
+    // Net grid lines (8×8)
+    const netLines = 8;
+    for (let i = 1; i < netLines; i++) {
+      const t = i / netLines;
+      // Horizontal
+      const lineLat = south + t * (north - south);
+      this._previewEntities.push(this.viewer.entities.add({
+        polyline: {
+          positions: Cesium.Cartesian3.fromDegreesArray([west, lineLat, east, lineLat]),
+          width: 2,
+          material: netColor,
+          clampToGround: true,
+        },
+      }));
+      // Vertical
+      const lineLng = west + t * (east - west);
+      this._previewEntities.push(this.viewer.entities.add({
+        polyline: {
+          positions: Cesium.Cartesian3.fromDegreesArray([lineLng, south, lineLng, north]),
+          width: 2,
+          material: netColor,
+          clampToGround: true,
+        },
+      }));
+    }
+
+    // Diagonal crosses
+    this._previewEntities.push(this.viewer.entities.add({
+      polyline: {
+        positions: Cesium.Cartesian3.fromDegreesArray([west, south, east, north]),
+        width: 2,
+        material: netColor,
+        clampToGround: true,
+      },
+    }));
+    this._previewEntities.push(this.viewer.entities.add({
+      polyline: {
+        positions: Cesium.Cartesian3.fromDegreesArray([east, south, west, north]),
+        width: 2,
+        material: netColor,
+        clampToGround: true,
+      },
+    }));
+  }
+
+  /**
+   * Remove the preview region from the map.
+   */
+  removePreviewRegion() {
+    if (this._previewEntities) {
+      for (const entity of this._previewEntities) {
+        this.viewer.entities.remove(entity);
+      }
+      this._previewEntities = null;
+    }
   }
 }

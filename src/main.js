@@ -33,6 +33,7 @@ let debrisManager = null;
 let currentLocation = LOCATIONS[0]; // French Quarter
 let currentViewPreset = 'aerial';
 let activeFlagEntities = []; // store dynamically spawned flags
+let previewTimeout = null; // auto-hide timer for region size preview
 
 // ─── Boot ────────────────────────────────────────────────────
 async function boot() {
@@ -154,7 +155,37 @@ function initUI() {
     },
 
     onRadiusChange: (radius) => {
-      if (!waterRenderer.hasOrigin() || controls.currentLevel <= 0) return;
+      // No origin set — show a mesh preview at the camera center
+      if (!waterRenderer.hasOrigin()) {
+        // Clear any pending hide timer
+        if (previewTimeout) clearTimeout(previewTimeout);
+
+        // Use pickEllipsoid (works even when 3D tiles cover the globe)
+        const center = viewer.camera.pickEllipsoid(
+          new Cesium.Cartesian2(
+            viewer.canvas.clientWidth / 2,
+            viewer.canvas.clientHeight / 2
+          ),
+          viewer.scene.globe.ellipsoid
+        );
+        if (center) {
+          const carto = Cesium.Cartographic.fromCartesian(center);
+          waterRenderer.showPreviewRegion(
+            Cesium.Math.toDegrees(carto.latitude),
+            Cesium.Math.toDegrees(carto.longitude),
+            radius
+          );
+        }
+
+        // Auto-hide after 1.5s of no slider activity
+        previewTimeout = setTimeout(() => {
+          waterRenderer.removePreviewRegion();
+          previewTimeout = null;
+        }, 1500);
+
+        return;
+      }
+      if (controls.currentLevel <= 0) return;
       waterRenderer.updateWater(controls.currentLevel, radius);
       infoPanel.setFloodArea(waterRenderer.getEstimatedArea());
     },
