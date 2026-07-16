@@ -111,8 +111,9 @@ export function* floodFillAnimated(demGrid, seedRow, seedCol, waterLevelMSL) {
   if (demGrid[seedRow][seedCol] >= waterLevelMSL) return;
 
   let frontier = [[seedRow, seedCol]];
-  flooded.add(key(seedRow, seedCol));
-  yield flooded;
+  const seedKey = key(seedRow, seedCol);
+  flooded.add(seedKey);
+  yield { flooded, newCells: [seedKey] };
 
   const dirs = [
     [-1, 0], [1, 0], [0, -1], [0, 1],
@@ -121,6 +122,7 @@ export function* floodFillAnimated(demGrid, seedRow, seedCol, waterLevelMSL) {
 
   while (frontier.length > 0) {
     const nextFrontier = [];
+    const stepNewCells = [];
     for (const [r, c] of frontier) {
       for (const [dr, dc] of dirs) {
         const nr = r + dr;
@@ -133,12 +135,13 @@ export function* floodFillAnimated(demGrid, seedRow, seedCol, waterLevelMSL) {
         if (demGrid[nr][nc] < waterLevelMSL) {
           flooded.add(k);
           nextFrontier.push([nr, nc]);
+          stepNewCells.push(k);
         }
       }
     }
     if (nextFrontier.length > 0) {
       frontier = nextFrontier;
-      yield flooded;
+      yield { flooded, newCells: stepNewCells };
     } else {
       break;
     }

@@ -1,5 +1,5 @@
 import * as Cesium from 'cesium';
-import { floodFill, getFloodedCellRects, floodFillAnimated } from './FloodFill.js';
+import { floodFill, getFloodedCellRects } from './FloodFill.js';
 
 /**
  * WaterRenderer — Animated water surface with USGS bare-earth elevation.
@@ -27,6 +27,7 @@ export class WaterRenderer {
     this.markerEntity = null;
     this.boundaryEntity = null;
     this._previewEntities = null;
+    this.animatedPrimitives = [];
 
     // Origin (set by click)
     this.originLat = null;
@@ -203,12 +204,20 @@ export class WaterRenderer {
   }
 
   /**
-   * Animate water spreading outward from the origin, ring by ring.
-   * Uses the BFS generator to progressively reveal flooded cells.
+   * Animate water spreading outward from the origin as expanding rings.
    *
-   * @param {number} waterLevelAboveGround - Meters above ground
+   * Computes the full flood fill, then reveals cells progressively by
+   * their distance from the origin — closest cells appear first,
+   * creating a natural radial spreading effect. This works correctly
+   * on flat terrain where elevation-based approaches fail because
+   * all cells are at nearly the same height.
+   *
+   * Uses additive rendering (drawing only newly flooded cells each frame)
+   * to eliminate all flicker.
+   *
+   * @param {number} waterLevelAboveGround - Target meters above ground
    * @param {number} radius - Coverage radius in degrees
-   * @param {Function} [onUpdate] - Callback with cell count after each ring
+   * @param {Function} [onUpdate] - Callback with cell count after each step
    */
   animateFloodFill(waterLevelAboveGround, radius, onUpdate = null) {
     // Cancel any existing animation
@@ -233,39 +242,100 @@ export class WaterRenderer {
     }
 
     const waterLevelMSL = this.groundNavd88 + waterLevelAboveGround;
-    const seedRow = Math.floor(this.demData.meta.rows / 2);
-    const seedCol = Math.floor(this.demData.meta.cols / 2);
-
-    const generator = floodFillAnimated(
-      this.demData.grid, seedRow, seedCol, waterLevelMSL
-    );
     const meta = this.demData.meta;
-    const stepInterval = 100; // ms between each BFS ring
-    let lastStepTime = 0;
+    const seedRow = Math.floor(meta.rows / 2);
+    const seedCol = Math.floor(meta.cols / 2);
 
-    console.log('[WaterRenderer] Starting flood flow animation...');
+    // Phase 1: Compute ALL flooded cells at the target water level
+    const allFloodedCells = floodFill(this.demData.grid, seedRow, seedCol, waterLevelMSL);
+    if (allFloodedCells.size === 0) return;
+
+    // Phase 2: Calculate each cell's distance from the seed (origin)
+    // and find the maximum distance for normalization
+    const cellsWithDistance = [];
+    let maxDist = 0;
+    for (const cellKey of allFloodedCells) {
+      const [r, c] = cellKey.split(',').map(Number);
+      const dr = r - seedRow;
+      const dc = c - seedCol;
+      const dist = Math.sqrt(dr * dr + dc * dc);
+      cellsWithDistance.push({ key: cellKey, dist });
+      if (dist > maxDist) maxDist = dist;
+    }
+
+    // Sort by distance (closest to origin first)
+    cellsWithDistance.sort((a, b) => a.dist - b.dist);
+
+    console.log(`[WaterRenderer] Prepared radial spread animation: ${cellsWithDistance.length} cells, max dist: ${maxDist.toFixed(1)} grid units`);
+
+    // Phase 3: Animate — expand visible radius from 0 to maxDist over time
+    const duration = 6000; // 6 seconds for a slower, more realistic flood spread
+    const startTime = performance.now();
+    const minUpdateGap = 30; // ms between visual updates for smoother frame rates
+    let lastUpdateTime = 0;
+    let lastRenderedCount = 0;
 
     const animate = (timestamp) => {
-      if (timestamp - lastStepTime >= stepInterval) {
-        const result = generator.next();
+      if (!this.animationId) return;
 
-        if (!result.done && result.value && result.value.size > 0) {
-          this._removeWater();
-          const rects = getFloodedCellRects(result.value, meta);
-          this._renderFloodFillPrimitive(rects, waterSurfaceEllipsoid);
-          if (onUpdate) onUpdate(result.value.size);
-          lastStepTime = timestamp;
+      const elapsed = timestamp - startTime;
+      const linearProgress = Math.min(elapsed / duration, 1.0);
+      // Ease-out cubic: water rushes outward quickly, then slows at edges
+      const progress = 1 - Math.pow(1 - linearProgress, 3);
+
+      // Only update visuals at throttled intervals (or on the final frame)
+      if (timestamp - lastUpdateTime >= minUpdateGap || linearProgress >= 1.0) {
+        // Current visible radius (in grid-cell units)
+        const currentMaxDist = maxDist * progress;
+
+        // Find how many cells fall within currentMaxDist
+        let visibleCount = cellsWithDistance.length; // default: all
+        for (let i = lastRenderedCount; i < cellsWithDistance.length; i++) {
+          if (cellsWithDistance[i].dist > currentMaxDist) {
+            visibleCount = i;
+            break;
+          }
         }
 
-        if (result.done) {
-          console.log('[WaterRenderer] Flow animation complete');
-          this.animationId = null;
-          // After animation, render at current slider level (user may have moved it)
-          this.updateWater(this.currentLevel, this.currentRadius);
-          return;
+        // Additive rendering: only render the NEWLY visible cells
+        if (visibleCount > lastRenderedCount) {
+          const newKeys = new Set(
+            cellsWithDistance.slice(lastRenderedCount, visibleCount).map(c => c.key)
+          );
+          const rects = getFloodedCellRects(newKeys, meta);
+          
+          const newPrimitive = this._createAdditiveFloodPrimitive(rects, waterSurfaceEllipsoid);
+          if (newPrimitive) {
+            this.animatedPrimitives.push(newPrimitive);
+          }
+          
+          lastRenderedCount = visibleCount;
+
+          if (onUpdate) onUpdate(visibleCount);
+        }
+
+        lastUpdateTime = timestamp;
+      }
+
+      if (linearProgress < 1.0) {
+        this.animationId = requestAnimationFrame(animate);
+      } else {
+        console.log('[WaterRenderer] Radial spread animation complete');
+        this.animationId = null;
+
+        // Consolidate: Replace all additive primitives with a single optimized primitive
+        // for better performance after the animation finishes
+        const finalLevel = this.currentLevel;
+        if (finalLevel > 0) {
+          const finalMSL = this.groundNavd88 + finalLevel;
+          const finalSurface = this.groundEllipsoid + finalLevel;
+          const finalCells = floodFill(this.demData.grid, seedRow, seedCol, finalMSL);
+          if (finalCells.size > 0) {
+            const finalRects = getFloodedCellRects(finalCells, meta);
+            this._swapFloodPrimitive(finalRects, finalSurface); // the swap will clean up animatedPrimitives
+          }
         }
       }
-      this.animationId = requestAnimationFrame(animate);
     };
 
     this.animationId = requestAnimationFrame(animate);
@@ -368,6 +438,126 @@ export class WaterRenderer {
     );
   }
 
+  /**
+   * Creates a primitive for a new batch of flooded cells without removing anything.
+   *
+   * @param {Array} floodedRects
+   * @param {number} waterSurfaceEllipsoid
+   * @returns {Cesium.Primitive|null}
+   */
+  _createAdditiveFloodPrimitive(floodedRects, waterSurfaceEllipsoid) {
+    const instances = floodedRects.map((rect, i) => {
+      const halfLat = rect.latSize / 2;
+      const halfLng = rect.lngSize / 2;
+
+      const positions = Cesium.Cartesian3.fromDegreesArray([
+        rect.lng - halfLng, rect.lat - halfLat,
+        rect.lng + halfLng, rect.lat - halfLat,
+        rect.lng + halfLng, rect.lat + halfLat,
+        rect.lng - halfLng, rect.lat + halfLat,
+      ]);
+
+      return new Cesium.GeometryInstance({
+        geometry: new Cesium.PolygonGeometry({
+          polygonHierarchy: new Cesium.PolygonHierarchy(positions),
+          height: waterSurfaceEllipsoid,
+          vertexFormat: Cesium.EllipsoidSurfaceAppearance.VERTEX_FORMAT,
+        }),
+        id: `hydroviz-flood-anim-${Date.now()}-${i}`,
+      });
+    });
+
+    if (instances.length === 0) return null;
+
+    const waterMaterial = Cesium.Material.fromType('Water', {
+      baseWaterColor: new Cesium.Color(0.02, 0.15, 0.6, 0.85),
+      normalMap: Cesium.buildModuleUrl('Assets/Textures/waterNormals.jpg'),
+      frequency: 8000.0,
+      animationSpeed: 0.008,
+      amplitude: 6.0,
+      specularIntensity: 0.4,
+    });
+
+    return this.viewer.scene.primitives.add(
+      new Cesium.Primitive({
+        geometryInstances: instances,
+        appearance: new Cesium.EllipsoidSurfaceAppearance({
+          material: waterMaterial,
+          aboveGround: false,
+          translucent: true,
+        }),
+        asynchronous: false,
+      })
+    );
+  }
+
+  /**
+   * Double-buffered primitive swap for flicker-free animation.
+   * Creates the new primitive BEFORE removing the old one, ensuring
+   * there is always water visible on screen (no gap between frames).
+   *
+   * @param {Array} floodedRects - Array of { lat, lng, latSize, lngSize }
+   * @param {number} waterSurfaceEllipsoid - Absolute ellipsoid height
+   */
+  _swapFloodPrimitive(floodedRects, waterSurfaceEllipsoid) {
+    const instances = floodedRects.map((rect, i) => {
+      const halfLat = rect.latSize / 2;
+      const halfLng = rect.lngSize / 2;
+
+      const positions = Cesium.Cartesian3.fromDegreesArray([
+        rect.lng - halfLng, rect.lat - halfLat,
+        rect.lng + halfLng, rect.lat - halfLat,
+        rect.lng + halfLng, rect.lat + halfLat,
+        rect.lng - halfLng, rect.lat + halfLat,
+      ]);
+
+      return new Cesium.GeometryInstance({
+        geometry: new Cesium.PolygonGeometry({
+          polygonHierarchy: new Cesium.PolygonHierarchy(positions),
+          height: waterSurfaceEllipsoid,
+          vertexFormat: Cesium.EllipsoidSurfaceAppearance.VERTEX_FORMAT,
+        }),
+        id: `hydroviz-flood-anim-${i}`,
+      });
+    });
+
+    if (instances.length === 0) return;
+
+    const waterMaterial = Cesium.Material.fromType('Water', {
+      baseWaterColor: new Cesium.Color(0.02, 0.15, 0.6, 0.85),
+      normalMap: Cesium.buildModuleUrl('Assets/Textures/waterNormals.jpg'),
+      frequency: 8000.0,
+      animationSpeed: 0.008,
+      amplitude: 6.0,
+      specularIntensity: 0.4,
+    });
+
+    // ─── Double buffer: add NEW first, then remove OLD ───
+    const newPrimitive = this.viewer.scene.primitives.add(
+      new Cesium.Primitive({
+        geometryInstances: instances,
+        appearance: new Cesium.EllipsoidSurfaceAppearance({
+          material: waterMaterial,
+          aboveGround: false,
+          translucent: true,
+        }),
+        asynchronous: false,
+      })
+    );
+
+    // THEN remove old primitive (no gap = no flicker)
+    if (this.waterPrimitive) {
+      this.viewer.scene.primitives.remove(this.waterPrimitive);
+    }
+    // Clean up any leftover batch primitives from older animation approaches
+    for (const prim of this.animatedPrimitives) {
+      this.viewer.scene.primitives.remove(prim);
+    }
+    this.animatedPrimitives = [];
+
+    this.waterPrimitive = newPrimitive;
+  }
+
   _updateMarker(lat, lng, ellipsoidHeight) {
     if (this.markerEntity) {
       this.viewer.entities.remove(this.markerEntity);
@@ -418,6 +608,12 @@ export class WaterRenderer {
     if (this.waterPrimitive) {
       this.viewer.scene.primitives.remove(this.waterPrimitive);
       this.waterPrimitive = null;
+    }
+    if (this.animatedPrimitives && this.animatedPrimitives.length > 0) {
+      for (const prim of this.animatedPrimitives) {
+        this.viewer.scene.primitives.remove(prim);
+      }
+      this.animatedPrimitives = [];
     }
   }
 
