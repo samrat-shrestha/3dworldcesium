@@ -1,5 +1,6 @@
 import * as Cesium from 'cesium';
 import { floodFill, getFloodedCellRects } from './FloodFill.js';
+import { SWESolver } from './SWESolver.js';
 
 /**
  * WaterRenderer — Animated water surface with USGS bare-earth elevation.
@@ -28,6 +29,7 @@ export class WaterRenderer {
     this.boundaryEntity = null;
     this._previewEntities = null;
     this.animatedPrimitives = [];
+    this._swePrimitive = null;   // tracked separately for SWE animation double-buffer
 
     // Origin (set by click)
     this.originLat = null;
@@ -204,16 +206,13 @@ export class WaterRenderer {
   }
 
   /**
-   * Animate water spreading outward from the origin as expanding rings.
+   * Animate water spreading outward using a Shallow Water Equations solver.
    *
-   * Computes the full flood fill, then reveals cells progressively by
-   * their distance from the origin — closest cells appear first,
-   * creating a natural radial spreading effect. This works correctly
-   * on flat terrain where elevation-based approaches fail because
-   * all cells are at nearly the same height.
-   *
-   * Uses additive rendering (drawing only newly flooded cells each frame)
-   * to eliminate all flicker.
+   * Runs a point-source simulation: water is injected at the click origin and
+   * spreads under gravity following the terrain. Uses non-linear time compression
+   * (slow start → fast finish) so the early flow from the source is clearly
+   * visible. Renders with a lightweight material during animation, then swaps
+   * to the full Water shader using the solver's own final state (no BFS pop).
    *
    * @param {number} waterLevelAboveGround - Target meters above ground
    * @param {number} radius - Coverage radius in degrees
@@ -246,95 +245,126 @@ export class WaterRenderer {
     const seedRow = Math.floor(meta.rows / 2);
     const seedCol = Math.floor(meta.cols / 2);
 
-    // Phase 1: Compute ALL flooded cells at the target water level
-    const allFloodedCells = floodFill(this.demData.grid, seedRow, seedCol, waterLevelMSL);
-    if (allFloodedCells.size === 0) return;
+    // Steady-state flood fill (for target volume calculation)
+    const finalFloodedCells = floodFill(this.demData.grid, seedRow, seedCol, waterLevelMSL);
+    if (finalFloodedCells.size === 0) return;
 
-    // Phase 2: Calculate each cell's distance from the seed (origin)
-    // and find the maximum distance for normalization
-    const cellsWithDistance = [];
-    let maxDist = 0;
-    for (const cellKey of allFloodedCells) {
-      const [r, c] = cellKey.split(',').map(Number);
-      const dr = r - seedRow;
-      const dc = c - seedCol;
-      const dist = Math.sqrt(dr * dr + dc * dc);
-      cellsWithDistance.push({ key: cellKey, dist });
-      if (dist > maxDist) maxDist = dist;
+    // ─── Create SWE solver ───
+    const solver = new SWESolver(this.demData.grid, meta);
+
+    // Tiny initial source: just the centre cell + immediate neighbours
+    // so the user sees water EMERGE from the click point
+    solver.initDamBreak(seedRow, seedCol, waterLevelAboveGround * 4, 1);
+
+    // Compute target volume for injection
+    const cellArea = solver.dx * solver.dy;
+    let targetVolume = 0;
+    for (const key of finalFloodedCells) {
+      const [r, c] = key.split(',').map(Number);
+      targetVolume += Math.max(0, waterLevelMSL - this.demData.grid[r][c]) * cellArea;
     }
+    const initialVolume = solver.getTotalVolume();
+    const remainingVolume = Math.max(0, targetVolume - initialVolume);
 
-    // Sort by distance (closest to origin first)
-    cellsWithDistance.sort((a, b) => a.dist - b.dist);
+    // Simulation timing
+    const animDuration = 6000;   // 6 s wall-clock (a bit longer for visible flow)
+    const totalSimTime  = 200;   // 200 s of physics
+    const injectionEnd  = totalSimTime * 0.85;  // inject for 85% of sim time
+    const injectionRate = remainingVolume / injectionEnd; // m³/s of sim time
 
-    console.log(`[WaterRenderer] Prepared radial spread animation: ${cellsWithDistance.length} cells, max dist: ${maxDist.toFixed(1)} grid units`);
+    console.log(
+      `[WaterRenderer] SWE source-spread: ${finalFloodedCells.size} target cells, ` +
+      `vol ${(targetVolume / 1000).toFixed(0)}k m³, grid ${solver.dx.toFixed(1)} × ${solver.dy.toFixed(1)} m`
+    );
 
-    // Phase 3: Animate — expand visible radius from 0 to maxDist over time
-    const duration = 6000; // 6 seconds for a slower, more realistic flood spread
+    // ─── Animation loop ───
     const startTime = performance.now();
-    const minUpdateGap = 30; // ms between visual updates for smoother frame rates
-    let lastUpdateTime = 0;
-    let lastRenderedCount = 0;
+    const renderGap = 60;  // ms between visual updates (~15 fps)
+    let lastRenderTime = 0;
+    let renderFrame = 0;
 
     const animate = (timestamp) => {
       if (!this.animationId) return;
 
       const elapsed = timestamp - startTime;
-      const linearProgress = Math.min(elapsed / duration, 1.0);
-      // Ease-out cubic: water rushes outward quickly, then slows at edges
-      const progress = 1 - Math.pow(1 - linearProgress, 3);
+      const linearProgress = Math.min(elapsed / animDuration, 1.0);
 
-      // Only update visuals at throttled intervals (or on the final frame)
-      if (timestamp - lastUpdateTime >= minUpdateGap || linearProgress >= 1.0) {
-        // Current visible radius (in grid-cell units)
-        const currentMaxDist = maxDist * progress;
+      // Non-linear time compression:
+      //   ease-out (sqrt) → FAST at start (see the wave burst), slow at end
+      //   At 25% wall-clock, 50% of physics time has passed
+      const simProgress = Math.sqrt(linearProgress);
+      const targetSimTime = totalSimTime * simProgress;
+      const simToAdvance  = targetSimTime - solver.simTime;
 
-        // Find how many cells fall within currentMaxDist
-        let visibleCount = cellsWithDistance.length; // default: all
-        for (let i = lastRenderedCount; i < cellsWithDistance.length; i++) {
-          if (cellsWithDistance[i].dist > currentMaxDist) {
-            visibleCount = i;
-            break;
+      if (simToAdvance > 0) {
+        // Inject water at centre (first 85% of sim time)
+        if (solver.simTime < injectionEnd) {
+          const injectSec = Math.min(simToAdvance, injectionEnd - solver.simTime);
+          solver.injectWater(seedRow, seedCol, injectionRate * injectSec, 2);
+        }
+
+        // Advance physics (CFL-safe sub-steps)
+        solver.advance(simToAdvance, 40);
+      }
+
+      // ─── Visual update (throttled) ───
+      if (timestamp - lastRenderTime >= renderGap || linearProgress >= 1.0) {
+        const floodedCells = solver.getFloodedCells(0.005);
+
+        if (floodedCells.size > 0) {
+          const rects = getFloodedCellRects(floodedCells, meta);
+          const newPrim = this._createLightweightFloodPrimitive(rects, waterSurfaceEllipsoid, true);
+
+          if (newPrim) {
+            // Double buffer: add new, then remove old → no flicker
+            const oldPrim = this._swePrimitive;
+            this._swePrimitive = newPrim;
+            if (oldPrim) this.viewer.scene.primitives.remove(oldPrim);
           }
         }
 
-        // Additive rendering: only render the NEWLY visible cells
-        if (visibleCount > lastRenderedCount) {
-          const newKeys = new Set(
-            cellsWithDistance.slice(lastRenderedCount, visibleCount).map(c => c.key)
+        renderFrame++;
+        if (renderFrame % 5 === 1) {
+          console.log(
+            `[SWE] frame ${renderFrame}: ${floodedCells.size} cells wet, ` +
+            `sim ${solver.simTime.toFixed(1)}s / ${totalSimTime}s, ` +
+            `wall ${(elapsed / 1000).toFixed(1)}s / ${(animDuration / 1000).toFixed(0)}s`
           );
-          const rects = getFloodedCellRects(newKeys, meta);
-          
-          const newPrimitive = this._createAdditiveFloodPrimitive(rects, waterSurfaceEllipsoid);
-          if (newPrimitive) {
-            this.animatedPrimitives.push(newPrimitive);
-          }
-          
-          lastRenderedCount = visibleCount;
-
-          if (onUpdate) onUpdate(visibleCount);
         }
 
-        lastUpdateTime = timestamp;
+        lastRenderTime = timestamp;
+        if (onUpdate) onUpdate(floodedCells.size);
       }
 
       if (linearProgress < 1.0) {
         this.animationId = requestAnimationFrame(animate);
       } else {
-        console.log('[WaterRenderer] Radial spread animation complete');
+        console.log('[WaterRenderer] SWE animation complete');
         this.animationId = null;
 
-        // Consolidate: Replace all additive primitives with a single optimized primitive
-        // for better performance after the animation finishes
-        const finalLevel = this.currentLevel;
-        if (finalLevel > 0) {
-          const finalMSL = this.groundNavd88 + finalLevel;
-          const finalSurface = this.groundEllipsoid + finalLevel;
-          const finalCells = floodFill(this.demData.grid, seedRow, seedCol, finalMSL);
-          if (finalCells.size > 0) {
-            const finalRects = getFloodedCellRects(finalCells, meta);
-            this._swapFloodPrimitive(finalRects, finalSurface); // the swap will clean up animatedPrimitives
-          }
-        }
+        // Consolidate: swap lightweight primitive for Water-material primitive
+        // Uses the SWE solver's OWN final state (not BFS) to avoid sudden area expansion
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            // Clean up SWE animation primitive
+            if (this._swePrimitive) {
+              this.viewer.scene.primitives.remove(this._swePrimitive);
+              this._swePrimitive = null;
+            }
+
+            const finalLevel = this.currentLevel;
+            if (finalLevel > 0 && this.demData) {
+              const finalMSL = this.groundNavd88 + finalLevel;
+              const finalSurface = this.groundEllipsoid + finalLevel;
+              // Use BFS flood fill for consistency with updateWater() slider behaviour
+              const finalCells = floodFill(this.demData.grid, seedRow, seedCol, finalMSL);
+              if (finalCells.size > 0) {
+                const finalRects = getFloodedCellRects(finalCells, meta);
+                this._renderFloodFillPrimitive(finalRects, finalSurface);
+              }
+            }
+          });
+        });
       }
     };
 
@@ -492,6 +522,58 @@ export class WaterRenderer {
   }
 
   /**
+   * Creates a lightweight primitive for animation batches.
+   * Uses a simple translucent color instead of the expensive Water material
+   * (no normal maps, no specular, no animated waves) for smooth frame rates.
+   * The full Water material is applied only once at consolidation.
+   *
+   * @param {Array} floodedRects
+   * @param {number} waterSurfaceEllipsoid
+   * @returns {Cesium.Primitive|null}
+   */
+  _createLightweightFloodPrimitive(floodedRects, waterSurfaceEllipsoid, sync = false) {
+    const instances = floodedRects.map((rect, i) => {
+      const halfLat = rect.latSize / 2;
+      const halfLng = rect.lngSize / 2;
+
+      const positions = Cesium.Cartesian3.fromDegreesArray([
+        rect.lng - halfLng, rect.lat - halfLat,
+        rect.lng + halfLng, rect.lat - halfLat,
+        rect.lng + halfLng, rect.lat + halfLat,
+        rect.lng - halfLng, rect.lat + halfLat,
+      ]);
+
+      return new Cesium.GeometryInstance({
+        geometry: new Cesium.PolygonGeometry({
+          polygonHierarchy: new Cesium.PolygonHierarchy(positions),
+          height: waterSurfaceEllipsoid,
+          vertexFormat: Cesium.EllipsoidSurfaceAppearance.VERTEX_FORMAT,
+        }),
+        id: `hydroviz-flood-light-${Date.now()}-${i}`,
+      });
+    });
+
+    if (instances.length === 0) return null;
+
+    // Simple translucent blue — much cheaper than the Water material
+    const simpleMaterial = Cesium.Material.fromType('Color', {
+      color: new Cesium.Color(0.02, 0.18, 0.65, 0.75),
+    });
+
+    return this.viewer.scene.primitives.add(
+      new Cesium.Primitive({
+        geometryInstances: instances,
+        appearance: new Cesium.EllipsoidSurfaceAppearance({
+          material: simpleMaterial,
+          aboveGround: false,
+          translucent: true,
+        }),
+        asynchronous: !sync, // sync=true for SWE double-buffer (must be visible immediately)
+      })
+    );
+  }
+
+  /**
    * Double-buffered primitive swap for flicker-free animation.
    * Creates the new primitive BEFORE removing the old one, ensuring
    * there is always water visible on screen (no gap between frames).
@@ -614,6 +696,11 @@ export class WaterRenderer {
         this.viewer.scene.primitives.remove(prim);
       }
       this.animatedPrimitives = [];
+    }
+    // Clean up SWE animation primitive (if user clears during animation)
+    if (this._swePrimitive) {
+      this.viewer.scene.primitives.remove(this._swePrimitive);
+      this._swePrimitive = null;
     }
   }
 
