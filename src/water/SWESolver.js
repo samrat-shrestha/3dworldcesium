@@ -43,16 +43,39 @@ export class SWESolver {
     }
 
     // Primary state arrays
-    this.h  = this._zeros();   // water depth      (m)
+    this.h = this._zeros();   // water depth      (m)
     this.hu = this._zeros();   // x-momentum       (m²/s)
     this.hv = this._zeros();   // y-momentum       (m²/s)
 
     // Work buffers (double-buffer swap target)
-    this._h  = this._zeros();
+    this._h = this._zeros();
     this._hu = this._zeros();
     this._hv = this._zeros();
 
+    // Wall mask for BFS confinement (1 = wall, 0 = fluid)
+    this.isWall = [];
+    for (let r = 0; r < this.rows; r++) {
+      this.isWall.push(new Uint8Array(this.cols));
+    }
+
     this.simTime = 0;  // accumulated physics time (s)
+  }
+
+  /**
+   * Restrict flow to a specific set of flooded cells (e.g. from BFS).
+   * @param {Set<string>} floodedCellsSet - Keys "r,c" of valid fluid cells
+   */
+  setMask(floodedCellsSet) {
+    for (let r = 0; r < this.rows; r++) {
+      for (let c = 0; c < this.cols; c++) {
+        this.isWall[r][c] = floodedCellsSet.has(`${r},${c}`) ? 0 : 1;
+        if (this.isWall[r][c]) {
+          this.h[r][c] = 0;
+          this.hu[r][c] = 0;
+          this.hv[r][c] = 0;
+        }
+      }
+    }
   }
 
   /** Allocate rows×cols grid of Float64Arrays filled with 0. */
@@ -107,36 +130,50 @@ export class SWESolver {
     // ─── Interior cells (r=1..rows-2, c=1..cols-2) ───
     for (let r = 1; r < rows - 1; r++) {
       for (let c = 1; c < cols - 1; c++) {
-        // Neighbour states
-        const hL  = this.h[r][c - 1], huL = this.hu[r][c - 1], hvL = this.hv[r][c - 1];
-        const hR  = this.h[r][c + 1], huR = this.hu[r][c + 1], hvR = this.hv[r][c + 1];
-        const hUp = this.h[r - 1][c], huUp = this.hu[r - 1][c], hvUp = this.hv[r - 1][c];
-        const hDn = this.h[r + 1][c], huDn = this.hu[r + 1][c], hvDn = this.hv[r + 1][c];
+        if (this.isWall[r][c]) {
+          this._h[r][c] = 0;
+          this._hu[r][c] = 0;
+          this._hv[r][c] = 0;
+          continue;
+        }
+
+        // Neighbour states (reflective if wall)
+        let hL = this.h[r][c - 1], huL = this.hu[r][c - 1], hvL = this.hv[r][c - 1];
+        if (this.isWall[r][c - 1]) { hL = this.h[r][c]; huL = -this.hu[r][c]; hvL = this.hv[r][c]; }
+
+        let hR = this.h[r][c + 1], huR = this.hu[r][c + 1], hvR = this.hv[r][c + 1];
+        if (this.isWall[r][c + 1]) { hR = this.h[r][c]; huR = -this.hu[r][c]; hvR = this.hv[r][c]; }
+
+        let hUp = this.h[r - 1][c], huUp = this.hu[r - 1][c], hvUp = this.hv[r - 1][c];
+        if (this.isWall[r - 1][c]) { hUp = this.h[r][c]; huUp = this.hu[r][c]; hvUp = -this.hv[r][c]; }
+
+        let hDn = this.h[r + 1][c], huDn = this.hu[r + 1][c], hvDn = this.hv[r + 1][c];
+        if (this.isWall[r + 1][c]) { hDn = this.h[r][c]; huDn = this.hu[r][c]; hvDn = -this.hv[r][c]; }
 
         // Lax-Friedrichs average
-        const ha  = 0.25 * (hL + hR + hUp + hDn);
+        const ha = 0.25 * (hL + hR + hUp + hDn);
         const hua = 0.25 * (huL + huR + huUp + huDn);
         const hva = 0.25 * (hvL + hvR + hvUp + hvDn);
 
         // Velocities (safe)
-        const uL  = this._vel(huL,  hL),  vL  = this._vel(hvL,  hL);
-        const uR  = this._vel(huR,  hR),  vR  = this._vel(hvR,  hR);
+        const uL = this._vel(huL, hL), vL = this._vel(hvL, hL);
+        const uR = this._vel(huR, hR), vR = this._vel(hvR, hR);
         const uUp = this._vel(huUp, hUp), vUp = this._vel(hvUp, hUp);
         const uDn = this._vel(huDn, hDn), vDn = this._vel(hvDn, hDn);
 
         // ── X-flux derivative  ∂F/∂x ≈ (F_right − F_left) / 2dx ──
         //   F = [ hu,  hu·u + g·h²/2,  hu·v ]
-        const dFx_h  = (huR - huL) / (2 * dx);
+        const dFx_h = (huR - huL) / (2 * dx);
         const dFx_hu = ((huR * uR + 0.5 * g * hR * hR) -
-                        (huL * uL + 0.5 * g * hL * hL)) / (2 * dx);
+          (huL * uL + 0.5 * g * hL * hL)) / (2 * dx);
         const dFx_hv = ((huR * vR) - (huL * vL)) / (2 * dx);
 
         // ── Y-flux derivative  ∂G/∂y ≈ (G_down − G_up) / 2dy ──
         //   G = [ hv,  hv·u,  hv·v + g·h²/2 ]
-        const dGy_h  = (hvDn - hvUp) / (2 * dy);
+        const dGy_h = (hvDn - hvUp) / (2 * dy);
         const dGy_hu = ((hvDn * uDn) - (hvUp * uUp)) / (2 * dy);
         const dGy_hv = ((hvDn * vDn + 0.5 * g * hDn * hDn) -
-                        (hvUp * vUp + 0.5 * g * hUp * hUp)) / (2 * dy);
+          (hvUp * vUp + 0.5 * g * hUp * hUp)) / (2 * dy);
 
         // ── Source: bed slope  S = −g·h · ∇B ──
         const dBdx = (B[r][c + 1] - B[r][c - 1]) / (2 * dx);
@@ -144,7 +181,7 @@ export class SWESolver {
         const hSrc = ha > MIN_DEPTH ? ha : 0;
 
         // Update
-        let h_new  = ha  - dt * (dFx_h  + dGy_h);
+        let h_new = ha - dt * (dFx_h + dGy_h);
         let hu_new = hua - dt * (dFx_hu + dGy_hu) - dt * g * hSrc * dBdx;
         let hv_new = hva - dt * (dFx_hv + dGy_hv) - dt * g * hSrc * dBdy;
 
@@ -164,7 +201,7 @@ export class SWESolver {
         // Clamp negative depths
         if (h_new < 0) { h_new = 0; hu_new = 0; hv_new = 0; }
 
-        this._h[r][c]  = h_new;
+        this._h[r][c] = h_new;
         this._hu[r][c] = hu_new;
         this._hv[r][c] = hv_new;
       }
@@ -173,27 +210,27 @@ export class SWESolver {
     // ─── Reflective boundary conditions ───
     for (let c = 0; c < cols; c++) {
       // Top wall (reflect y-momentum)
-      this._h[0][c]  = this._h[1][c];
+      this._h[0][c] = this._h[1][c];
       this._hu[0][c] = this._hu[1][c];
       this._hv[0][c] = -this._hv[1][c];
       // Bottom wall
-      this._h[rows - 1][c]  = this._h[rows - 2][c];
+      this._h[rows - 1][c] = this._h[rows - 2][c];
       this._hu[rows - 1][c] = this._hu[rows - 2][c];
       this._hv[rows - 1][c] = -this._hv[rows - 2][c];
     }
     for (let r = 0; r < rows; r++) {
       // Left wall (reflect x-momentum)
-      this._h[r][0]  = this._h[r][1];
+      this._h[r][0] = this._h[r][1];
       this._hu[r][0] = -this._hu[r][1];
       this._hv[r][0] = this._hv[r][1];
       // Right wall
-      this._h[r][cols - 1]  = this._h[r][cols - 2];
+      this._h[r][cols - 1] = this._h[r][cols - 2];
       this._hu[r][cols - 1] = -this._hu[r][cols - 2];
       this._hv[r][cols - 1] = this._hv[r][cols - 2];
     }
 
     // Swap primary ↔ work buffers
-    [this.h,  this._h]  = [this._h,  this.h];
+    [this.h, this._h] = [this._h, this.h];
     [this.hu, this._hu] = [this._hu, this.hu];
     [this.hv, this._hv] = [this._hv, this.hv];
 
@@ -213,7 +250,7 @@ export class SWESolver {
         const dr = r - centerRow;
         const dc = c - centerCol;
         const dist2 = dr * dr + dc * dc;
-        if (dist2 <= radius * radius * 4) {  // cut-off at 2× radius
+        if (dist2 <= radius * radius * 4 && !this.isWall[r][c]) {  // cut-off at 2× radius
           this.h[r][c] = peakDepth * Math.exp(-dist2 / (2 * sigma2));
         }
       }
@@ -235,7 +272,7 @@ export class SWESolver {
         if (dr * dr + dc * dc <= injectRadius * injectRadius) {
           const nr = row + dr;
           const nc = col + dc;
-          if (nr >= 1 && nr < this.rows - 1 && nc >= 1 && nc < this.cols - 1) {
+          if (nr >= 1 && nr < this.rows - 1 && nc >= 1 && nc < this.cols - 1 && !this.isWall[nr][nc]) {
             cells.push([nr, nc]);
           }
         }

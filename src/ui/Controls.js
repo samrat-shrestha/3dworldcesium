@@ -54,14 +54,16 @@ export class Controls {
         <!-- Location -->
         <div class="control-section">
           <div class="section-label">Location</div>
-          <select id="locationSelect" class="styled-select">
-            ${LOCATIONS.map((loc) =>
+          <div style="display: flex; gap: 8px; align-items: center;">
+            <select id="locationSelect" class="styled-select" style="flex: 1; margin: 0; min-width: 0;">
+              ${LOCATIONS.map((loc) =>
       `<option value="${loc.id}">${loc.name}</option>`
     ).join('')}
-          </select>
-          <button id="btnFlyTo" class="btn btn-primary" style="margin-top: 6px;">
-            Go To Location
-          </button>
+            </select>
+            <button id="btnFlyTo" class="btn btn-primary" style="display: flex; align-items: center; justify-content: center; gap: 4px; padding: 0 8px; height: 36px; margin: 0; width: auto; flex-shrink: 0; white-space: nowrap;">
+              Go
+            </button>
+          </div>
         </div>
 
         <div class="panel-divider"></div>
@@ -87,7 +89,7 @@ export class Controls {
                 <line x1="12" y1="16" x2="12" y2="12"></line>
                 <line x1="12" y1="8" x2="12.01" y2="8"></line>
               </svg>
-              <div class="info-tooltip" style="width: 220px;">
+              <div class="info-tooltip">
                 <div style="font-weight: 600; color: var(--text-primary); margin-bottom: 2px;">Orbit / Aerial</div>
                 <div class="tooltip-hint">Left drag — Rotate</div>
                 <div class="tooltip-hint">Right drag — Zoom</div>
@@ -107,7 +109,20 @@ export class Controls {
 
         <!-- Click Instruction -->
         <div class="control-section">
-          <div class="click-instruction" id="clickInstruction">
+          <div class="section-label">
+            Water Origin
+            <div class="info-icon-container" id="originInfoIcon" style="display: none;">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"></circle>
+                <line x1="12" y1="16" x2="12" y2="12"></line>
+                <line x1="12" y1="8" x2="12.01" y2="8"></line>
+              </svg>
+              <div class="info-tooltip" id="clickInstructionTooltip">
+                Click elsewhere to move origin
+              </div>
+            </div>
+          </div>
+          <div class="click-instruction" id="clickInstructionMsg">
             Click on the map to place water origin
           </div>
           <div class="origin-display" id="originDisplay" style="display: none;">
@@ -160,7 +175,7 @@ export class Controls {
             <!-- Actions -->
             <div class="control-section">
               <button id="btnClear" class="btn btn-danger">
-                Clear Water
+                Reset Simulation
               </button>
             </div>
           </div>
@@ -173,11 +188,18 @@ export class Controls {
     // Water level
     const waterSlider = document.getElementById('waterLevelSlider');
     const waterDisplay = document.getElementById('waterLevelDisplay');
+
+    // Update display while dragging
     waterSlider.addEventListener('input', () => {
+      const levelFt = parseFloat(waterSlider.value);
+      waterDisplay.textContent = `${levelFt.toFixed(1)} ft`;
+    });
+
+    // Trigger animation/logic on release
+    waterSlider.addEventListener('change', () => {
       const levelFt = parseFloat(waterSlider.value);
       const levelMeters = levelFt * 0.3048;
       this.currentLevel = levelMeters;
-      waterDisplay.textContent = `${levelFt.toFixed(1)} ft`;
       this.options.onWaterLevelChange(levelMeters);
     });
 
@@ -270,7 +292,8 @@ export class Controls {
    */
   setOrigin(origin) {
     const display = document.getElementById('originDisplay');
-    const instruction = document.getElementById('clickInstruction');
+    const infoIcon = document.getElementById('originInfoIcon');
+    const msg = document.getElementById('clickInstructionMsg');
     const coordsEl = document.getElementById('originCoords');
     const elevEl = document.getElementById('originElevation');
     const waterContainer = document.getElementById('waterControlsContainer');
@@ -278,8 +301,10 @@ export class Controls {
 
     if (origin) {
       display.style.display = 'block';
+      if (msg) msg.style.display = 'none';
+      if (infoIcon) infoIcon.style.display = 'inline-flex';
+      
       if (waterContainer) waterContainer.classList.add('visible');
-      instruction.textContent = 'Click elsewhere to move origin';
       coordsEl.textContent = `${origin.lat.toFixed(5)}°, ${origin.lng.toFixed(5)}°`;
       const elevFt = origin.elevation / 0.3048;
       elevEl.textContent = `${elevFt.toFixed(1)} ft MSL`;
@@ -290,8 +315,10 @@ export class Controls {
       }
     } else {
       display.style.display = 'none';
+      if (msg) msg.style.display = 'block';
+      if (infoIcon) infoIcon.style.display = 'none';
+
       if (waterContainer) waterContainer.classList.remove('visible');
-      instruction.textContent = 'Click on the map to place water origin';
       coordsEl.textContent = '—';
       elevEl.textContent = '—';
       // Unlock region size for next placement
@@ -302,19 +329,22 @@ export class Controls {
     }
   }
 
-  /**
-   * Show/hide loading indicator during USGS elevation fetch.
-   * @param {boolean} loading
-   */
   setElevationLoading(loading) {
-    const instruction = document.getElementById('clickInstruction');
-    if (instruction) {
-      if (loading) {
-        instruction.innerHTML = '<span class="loading-dots">Measuring elevation</span>';
-        instruction.classList.add('loading');
-      } else {
-        instruction.textContent = 'Click elsewhere to move origin';
-        instruction.classList.remove('loading');
+    const display = document.getElementById('originDisplay');
+    const msg = document.getElementById('clickInstructionMsg');
+    const infoIcon = document.getElementById('originInfoIcon');
+    
+    if (loading) {
+      if (display) display.style.display = 'none';
+      if (infoIcon) infoIcon.style.display = 'none';
+      if (msg) {
+        msg.style.display = 'block';
+        msg.innerHTML = '<span class="loading-dots">Measuring elevation</span>';
+        msg.classList.add('loading');
+      }
+    } else {
+      if (msg) {
+        msg.classList.remove('loading');
       }
     }
   }

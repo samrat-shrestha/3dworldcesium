@@ -195,8 +195,8 @@ export class WaterRenderer {
       const floodedCells = floodFill(this.demData.grid, seedRow, seedCol, waterLevelMSL);
 
       if (floodedCells.size > 0) {
-        const rects = getFloodedCellRects(floodedCells, this.demData.meta);
-        this._renderFloodFillPrimitive(rects, waterSurfaceEllipsoid);
+        const depthGrid = this._buildDepthGrid(floodedCells, waterLevelMSL);
+        this.waterPrimitive = this._createWaterMeshPrimitive(depthGrid, false, false);
         return;
       }
     }
@@ -251,6 +251,7 @@ export class WaterRenderer {
 
     // ─── Create SWE solver ───
     const solver = new SWESolver(this.demData.grid, meta);
+    solver.setMask(finalFloodedCells);
 
     // Tiny initial source: just the centre cell + immediate neighbours
     // so the user sees water EMERGE from the click point
@@ -267,9 +268,9 @@ export class WaterRenderer {
     const remainingVolume = Math.max(0, targetVolume - initialVolume);
 
     // Simulation timing
-    const animDuration = 6000;   // 6 s wall-clock (a bit longer for visible flow)
-    const totalSimTime  = 200;   // 200 s of physics
-    const injectionEnd  = totalSimTime * 0.85;  // inject for 85% of sim time
+    const animDuration = 24000;  // 24 s wall-clock for a slower, more visible flow
+    const totalSimTime = 200;   // 200 s of physics
+    const injectionEnd = totalSimTime * 0.85;  // inject for 85% of sim time
     const injectionRate = remainingVolume / injectionEnd; // m³/s of sim time
 
     console.log(
@@ -289,12 +290,10 @@ export class WaterRenderer {
       const elapsed = timestamp - startTime;
       const linearProgress = Math.min(elapsed / animDuration, 1.0);
 
-      // Non-linear time compression:
-      //   ease-out (sqrt) → FAST at start (see the wave burst), slow at end
-      //   At 25% wall-clock, 50% of physics time has passed
-      const simProgress = Math.sqrt(linearProgress);
+      // Linear time compression for steady, realistic flow speed
+      const simProgress = linearProgress;
       const targetSimTime = totalSimTime * simProgress;
-      const simToAdvance  = targetSimTime - solver.simTime;
+      const simToAdvance = targetSimTime - solver.simTime;
 
       if (simToAdvance > 0) {
         // Inject water at centre (first 85% of sim time)
@@ -312,14 +311,17 @@ export class WaterRenderer {
         const floodedCells = solver.getFloodedCells(0.005);
 
         if (floodedCells.size > 0) {
-          const rects = getFloodedCellRects(floodedCells, meta);
-          const newPrim = this._createLightweightFloodPrimitive(rects, waterSurfaceEllipsoid, true);
+          const newPrim = this._createWaterMeshPrimitive(solver.h, true, true);
 
           if (newPrim) {
             // Double buffer: add new, then remove old → no flicker
             const oldPrim = this._swePrimitive;
             this._swePrimitive = newPrim;
             if (oldPrim) this.viewer.scene.primitives.remove(oldPrim);
+          }
+          
+          if (this.debrisManager) {
+            this.debrisManager.updateWaterLevel(this.groundEllipsoid + this.currentLevel, solver.h, meta);
           }
         }
 
@@ -354,14 +356,9 @@ export class WaterRenderer {
 
             const finalLevel = this.currentLevel;
             if (finalLevel > 0 && this.demData) {
-              const finalMSL = this.groundNavd88 + finalLevel;
-              const finalSurface = this.groundEllipsoid + finalLevel;
-              // Use BFS flood fill for consistency with updateWater() slider behaviour
-              const finalCells = floodFill(this.demData.grid, seedRow, seedCol, finalMSL);
-              if (finalCells.size > 0) {
-                const finalRects = getFloodedCellRects(finalCells, meta);
-                this._renderFloodFillPrimitive(finalRects, finalSurface);
-              }
+              // Create the final high-quality mesh using the exact state of the SWE solver
+              // instead of snapping to the BFS steady-state, which causes a visual jump
+              this.waterPrimitive = this._createWaterMeshPrimitive(solver.h, false, false);
             }
           });
         });
@@ -369,6 +366,154 @@ export class WaterRenderer {
     };
 
     this.animationId = requestAnimationFrame(animate);
+  }
+
+  _buildDepthGrid(floodedCells, waterLevelMSL) {
+    const rows = this.demData.meta.rows;
+    const cols = this.demData.meta.cols;
+    const depthGrid = [];
+    for (let r = 0; r < rows; r++) {
+      depthGrid.push(new Float64Array(cols));
+    }
+    for (const key of floodedCells) {
+      const parts = key.split(',');
+      const r = parseInt(parts[0], 10);
+      const c = parseInt(parts[1], 10);
+      depthGrid[r][c] = waterLevelMSL - this.demData.grid[r][c];
+    }
+    return depthGrid;
+  }
+
+  _createWaterMeshPrimitive(depthGrid, isLightweight, sync) {
+    const meta = this.demData.meta;
+    const rows = meta.rows;
+    const cols = meta.cols;
+    const geoidOffset = this.groundEllipsoid - this.groundNavd88;
+
+    if (!this._baseMeshPositions ||
+      this._baseMeshRadius !== this.demRadius ||
+      this._baseMeshOriginLat !== meta.originLat ||
+      this._baseMeshOriginLng !== meta.originLng) {
+      this._baseMeshPositions = new Float64Array(rows * cols * 3);
+      this._baseMeshNormals = new Float64Array(rows * cols * 3);
+      this._meshIndices = new Uint16Array((rows - 1) * (cols - 1) * 6);
+      this._meshSt = new Float32Array(rows * cols * 2);
+      this._baseMeshRadius = this.demRadius;
+      this._baseMeshOriginLat = meta.originLat;
+      this._baseMeshOriginLng = meta.originLng;
+
+      const halfRows = Math.floor(rows / 2);
+      const halfCols = Math.floor(cols / 2);
+      let posIdx = 0, stIdx = 0, idxIdx = 0;
+
+      for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+          const lat = meta.originLat + (r - halfRows) * meta.cellSizeLat;
+          const lng = meta.originLng + (c - halfCols) * meta.cellSizeLng;
+
+          const cartesian = Cesium.Cartesian3.fromDegrees(lng, lat, 0);
+          const normal = Cesium.Ellipsoid.WGS84.geodeticSurfaceNormal(cartesian);
+
+          this._baseMeshPositions[posIdx] = cartesian.x;
+          this._baseMeshPositions[posIdx + 1] = cartesian.y;
+          this._baseMeshPositions[posIdx + 2] = cartesian.z;
+          this._baseMeshNormals[posIdx] = normal.x;
+          this._baseMeshNormals[posIdx + 1] = normal.y;
+          this._baseMeshNormals[posIdx + 2] = normal.z;
+          posIdx += 3;
+
+          this._meshSt[stIdx++] = c / (cols - 1);
+          this._meshSt[stIdx++] = r / (rows - 1);
+
+          if (r < rows - 1 && c < cols - 1) {
+            const i0 = r * cols + c;
+            this._meshIndices[idxIdx++] = i0;
+            this._meshIndices[idxIdx++] = i0 + 1;
+            this._meshIndices[idxIdx++] = i0 + cols;
+            this._meshIndices[idxIdx++] = i0 + 1;
+            this._meshIndices[idxIdx++] = i0 + cols + 1;
+            this._meshIndices[idxIdx++] = i0 + cols;
+          }
+        }
+      }
+    }
+
+    const vertexPositions = new Float64Array(rows * cols * 3);
+    let posIdx = 0;
+    let hasWet = false;
+
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const depth = depthGrid[r][c];
+        const bed = this.demData.grid[r][c] + geoidOffset;
+        // Dry cells pushed 2m underground so terrain depth-test hides them
+        const height = depth > 0.005 ? bed + depth : bed - 2.0;
+        if (depth > 0.005) hasWet = true;
+
+        const bx = this._baseMeshPositions[posIdx];
+        const by = this._baseMeshPositions[posIdx + 1];
+        const bz = this._baseMeshPositions[posIdx + 2];
+        const nx = this._baseMeshNormals[posIdx];
+        const ny = this._baseMeshNormals[posIdx + 1];
+        const nz = this._baseMeshNormals[posIdx + 2];
+
+        vertexPositions[posIdx++] = bx + nx * height;
+        vertexPositions[posIdx++] = by + ny * height;
+        vertexPositions[posIdx++] = bz + nz * height;
+      }
+    }
+
+    if (!hasWet) return null;
+
+    const geometry = new Cesium.Geometry({
+      attributes: {
+        position: new Cesium.GeometryAttribute({
+          componentDatatype: Cesium.ComponentDatatype.DOUBLE,
+          componentsPerAttribute: 3,
+          values: vertexPositions
+        }),
+        st: new Cesium.GeometryAttribute({
+          componentDatatype: Cesium.ComponentDatatype.FLOAT,
+          componentsPerAttribute: 2,
+          values: this._meshSt
+        })
+      },
+      indices: this._meshIndices,
+      primitiveType: Cesium.PrimitiveType.TRIANGLES,
+      boundingSphere: Cesium.BoundingSphere.fromVertices(vertexPositions)
+    });
+
+    const instance = new Cesium.GeometryInstance({ geometry });
+
+    let material;
+    if (isLightweight) {
+      material = Cesium.Material.fromType('Color', {
+        color: new Cesium.Color(0.02, 0.18, 0.65, 0.75),
+      });
+    } else {
+      material = Cesium.Material.fromType('Water', {
+        baseWaterColor: new Cesium.Color(0.02, 0.15, 0.6, 0.85),
+        blendColor: new Cesium.Color(0.02, 0.15, 0.6, 0.85),
+        normalMap: Cesium.buildModuleUrl('Assets/Textures/waterNormals.jpg'),
+        frequency: 8000.0,
+        fadeFactor: 100000.0,
+        animationSpeed: 0.008,
+        amplitude: 6.0,
+        specularIntensity: 0.4,
+      });
+    }
+
+    return this.viewer.scene.primitives.add(
+      new Cesium.Primitive({
+        geometryInstances: instance,
+        appearance: new Cesium.EllipsoidSurfaceAppearance({
+          material: material,
+          aboveGround: false,
+          translucent: true,
+        }),
+        asynchronous: false,
+      })
+    );
   }
 
   /**
@@ -394,8 +539,10 @@ export class WaterRenderer {
 
     const waterMaterial = Cesium.Material.fromType('Water', {
       baseWaterColor: new Cesium.Color(0.02, 0.15, 0.6, 0.85),
+      blendColor: new Cesium.Color(0.02, 0.15, 0.6, 0.85),
       normalMap: Cesium.buildModuleUrl('Assets/Textures/waterNormals.jpg'),
       frequency: 8000.0,
+      fadeFactor: 100000.0, // Fade out normal map at distance to prevent aliasing
       animationSpeed: 0.008, // Greatly reduced to make the water look calmer and slower
       amplitude: 6.0, // Reduced from 8.0 to make the waves less intense
       specularIntensity: 0.4, // Raised slightly to give it that realistic glint, but not blinding
@@ -448,8 +595,10 @@ export class WaterRenderer {
 
     const waterMaterial = Cesium.Material.fromType('Water', {
       baseWaterColor: new Cesium.Color(0.02, 0.15, 0.6, 0.85),
+      blendColor: new Cesium.Color(0.02, 0.15, 0.6, 0.85),
       normalMap: Cesium.buildModuleUrl('Assets/Textures/waterNormals.jpg'),
       frequency: 8000.0,
+      fadeFactor: 100000.0,
       animationSpeed: 0.008,
       amplitude: 6.0,
       specularIntensity: 0.4,
@@ -501,8 +650,10 @@ export class WaterRenderer {
 
     const waterMaterial = Cesium.Material.fromType('Water', {
       baseWaterColor: new Cesium.Color(0.02, 0.15, 0.6, 0.85),
+      blendColor: new Cesium.Color(0.02, 0.15, 0.6, 0.85),
       normalMap: Cesium.buildModuleUrl('Assets/Textures/waterNormals.jpg'),
       frequency: 8000.0,
+      fadeFactor: 100000.0,
       animationSpeed: 0.008,
       amplitude: 6.0,
       specularIntensity: 0.4,
@@ -607,8 +758,10 @@ export class WaterRenderer {
 
     const waterMaterial = Cesium.Material.fromType('Water', {
       baseWaterColor: new Cesium.Color(0.02, 0.15, 0.6, 0.85),
+      blendColor: new Cesium.Color(0.02, 0.15, 0.6, 0.85),
       normalMap: Cesium.buildModuleUrl('Assets/Textures/waterNormals.jpg'),
       frequency: 8000.0,
+      fadeFactor: 100000.0,
       animationSpeed: 0.008,
       amplitude: 6.0,
       specularIntensity: 0.4,

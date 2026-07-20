@@ -381,7 +381,7 @@ input[type="range"]::-moz-range-track {
 
 /* Disabled range slider */
 input[type="range"]:disabled {
-  opacity: 0.3;
+  opacity: 0.8;
   cursor: not-allowed;
   pointer-events: none;
 }
@@ -400,7 +400,7 @@ input[type="range"]:disabled::-moz-range-thumb {
 
 /* Disabled control section (dims label + slider together) */
 .control-section.disabled {
-  opacity: 0.35;
+  opacity: 0.6;
   pointer-events: none;
   transition: opacity 0.3s ease;
 }
@@ -552,14 +552,14 @@ input[type="range"]:disabled::-moz-range-thumb {
   display: none;
   position: absolute;
   top: 100%;
-  left: 50%;
-  transform: translateX(-50%);
+  right: 0;
   margin-top: 8px;
   background: var(--bg-panel);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   padding: 8px 10px;
-  width: 180px;
+  width: max-content;
+  white-space: nowrap;
   z-index: 2000;
   box-shadow: var(--shadow-panel);
   text-align: left;

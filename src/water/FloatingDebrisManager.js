@@ -108,9 +108,13 @@ export class FloatingDebrisManager {
   /**
    * Update the current water surface level.
    * @param {number} waterSurfaceEllipsoid 
+   * @param {Float64Array[]} depthGrid - Optional 2D grid from SWE solver
+   * @param {object} demMeta - Optional DEM metadata for coordinate mapping
    */
-  updateWaterLevel(waterSurfaceEllipsoid) {
+  updateWaterLevel(waterSurfaceEllipsoid, depthGrid = null, demMeta = null) {
     this.waterSurfaceEllipsoid = waterSurfaceEllipsoid;
+    this.depthGrid = depthGrid;
+    this.demMeta = demMeta;
   }
 
   /**
@@ -130,7 +134,31 @@ export class FloatingDebrisManager {
       let pitch = 0;
       let roll = 0;
 
-      const waterDepth = this.waterSurfaceEllipsoid - data.groundHeight;
+      let waterDepth = 0;
+      let localWaterSurface = this.waterSurfaceEllipsoid;
+
+      if (this.depthGrid && this.demMeta) {
+        // Convert radians to degrees for grid mapping
+        const latDeg = data.lat * 180 / Math.PI;
+        const lonDeg = data.lon * 180 / Math.PI;
+
+        // Map lon/lat to grid coordinates (r, c)
+        const dLat = latDeg - this.demMeta.originLat;
+        const dLng = lonDeg - this.demMeta.originLng;
+        const rOffset = Math.round(dLat / this.demMeta.cellSizeLat);
+        const cOffset = Math.round(dLng / this.demMeta.cellSizeLng);
+        const r = Math.floor(this.demMeta.rows / 2) + rOffset;
+        const c = Math.floor(this.demMeta.cols / 2) + cOffset;
+
+        if (r >= 0 && r < this.demMeta.rows && c >= 0 && c < this.demMeta.cols) {
+          waterDepth = this.depthGrid[r][c];
+          localWaterSurface = data.groundHeight + waterDepth;
+        } else {
+          waterDepth = 0; // outside grid means dry
+        }
+      } else {
+        waterDepth = this.waterSurfaceEllipsoid - data.groundHeight;
+      }
 
       // Cars generally need at least 0.5-0.6 meters of water to begin floating.
       if (waterDepth > 0.6) {
@@ -140,7 +168,7 @@ export class FloatingDebrisManager {
 
         // The car should be partially submerged, not walking on water!
         // We'll submerge it by 0.6 meters.
-        targetHeight = this.waterSurfaceEllipsoid - 0.8 + bob;
+        targetHeight = localWaterSurface - 0.8 + bob;
 
         // Slight rocking (pitch/roll)
         pitch = Math.sin(t * 1.5 + data.timeOffset) * 0.05;
