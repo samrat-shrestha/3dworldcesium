@@ -17,6 +17,7 @@ import { WaterRenderer } from './water/WaterRenderer.js';
 import { ElevationService } from './services/ElevationService.js';
 import { Controls, LOCATIONS } from './ui/Controls.js';
 import { InfoPanel } from './ui/InfoPanel.js';
+import { DamagePanel } from './ui/DamagePanel.js';
 import { getSavedToken, showTokenModal } from './ui/TokenModal.js';
 import { FirstPersonControls } from './navigation/FirstPersonControls.js';
 import { FloatingDebrisManager } from './water/FloatingDebrisManager.js';
@@ -27,6 +28,7 @@ let elevationService = null;
 let waterRenderer = null;
 let controls = null;
 let infoPanel = null;
+let damagePanel = null;
 let fpControls = null;
 let clickHandler = null;
 let debrisManager = null;
@@ -95,43 +97,188 @@ function initClickHandler() {
 
       console.log(`[HydroViz] Clicked: ${lat.toFixed(5)}°, ${lng.toFixed(5)}° — clicked surface: ${clickedElevation.toFixed(1)}m`);
 
-      // Show loading state while fetching USGS elevation
-      controls.setElevationLoading(true);
-      waterRenderer.clearWaterOnly();
+      let isBuildingClick = false;
+      if (waterRenderer.hasOrigin()) {
+        const origin = waterRenderer.getOrigin();
+        const originCarto = Cesium.Cartographic.fromDegrees(origin.lng, origin.lat);
+        const clickCarto = Cesium.Cartographic.fromDegrees(lng, lat);
+        const geodesic = new Cesium.EllipsoidGeodesic(originCarto, clickCarto);
+        const distanceM = geodesic.surfaceDistance;
 
-      // Async: fetches bare-earth elevation + calibrates geoid + fetches DEM grid
-      await waterRenderer.setOrigin(lat, lng, clickedElevation, controls.currentRadius);
+        // currentRadius is in degrees. ~111,000 meters per degree
+        const radiusM = controls.currentRadius * 111000;
 
-      // Spawn floating cars within the water radius, passing ground elevation to avoid buildings
-      debrisManager.spawnDebris(lat, lng, controls.currentRadius * 111, 15, waterRenderer.getGroundElevation());
+        // Treat click as building inspect if inside radius AND water is active
+        if (distanceM <= radiusM && controls.currentLevel > 0) {
+          isBuildingClick = true;
+        }
+      }
 
-      // Spawn flags dynamically on the ground around the clicked area
-      spawnFlags(lat, lng, controls.currentRadius * 111);
-
-      // Hide loading
-      controls.setElevationLoading(false);
-
-      // Show NAVD88 (MSL) elevation — much more meaningful to users
-      const groundNavd88 = waterRenderer.getGroundNavd88();
-      const origin = { lat, lng, elevation: groundNavd88 };
-
-      controls.setOrigin(origin);
-      controls.setGroundElevation(groundNavd88);
-      infoPanel.setOrigin(origin);
-      infoPanel.setGroundElevation(groundNavd88);
-
-      // If water level is already set, animate water spreading from new origin
-      if (controls.currentLevel > 0) {
-        waterRenderer.animateFloodFill(controls.currentLevel, controls.currentRadius);
-        const surfaceNavd88 = waterRenderer.getWaterSurfaceNavd88();
-        controls.setWaterSurface(surfaceNavd88);
-        infoPanel.setWaterSurface(surfaceNavd88);
-        debrisManager.updateWaterLevel(waterRenderer.getWaterSurfaceElevation());
+      if (isBuildingClick) {
+        handleBuildingClick(lat, lng, clickedElevation);
       } else {
-        debrisManager.updateWaterLevel(Number.NEGATIVE_INFINITY);
+        // Show loading state while fetching USGS elevation
+        controls.setElevationLoading(true);
+        waterRenderer.clearWaterOnly();
+        if (damagePanel) damagePanel.hide();
+        if (selectedBuildingMarker) {
+          viewer.entities.remove(selectedBuildingMarker);
+          selectedBuildingMarker = null;
+        }
+
+        // Async: fetches bare-earth elevation + calibrates geoid + fetches DEM grid
+        await waterRenderer.setOrigin(lat, lng, clickedElevation, controls.currentRadius);
+
+        // Spawn floating cars within the water radius, passing ground elevation to avoid buildings
+        debrisManager.spawnDebris(lat, lng, controls.currentRadius * 111, 15, waterRenderer.getGroundElevation());
+
+        // Spawn flags dynamically on the ground around the clicked area
+        spawnFlags(lat, lng, controls.currentRadius * 111);
+
+        // Hide loading
+        controls.setElevationLoading(false);
+
+        // Show NAVD88 (MSL) elevation — much more meaningful to users
+        const groundNavd88 = waterRenderer.getGroundNavd88();
+        const origin = { lat, lng, elevation: groundNavd88 };
+
+        controls.setOrigin(origin);
+        controls.setGroundElevation(groundNavd88);
+        infoPanel.setOrigin(origin);
+        infoPanel.setGroundElevation(groundNavd88);
+
+        // If water level is already set, animate water spreading from new origin
+        if (controls.currentLevel > 0) {
+          waterRenderer.animateFloodFill(controls.currentLevel, controls.currentRadius);
+          const surfaceNavd88 = waterRenderer.getWaterSurfaceNavd88();
+          controls.setWaterSurface(surfaceNavd88);
+          infoPanel.setWaterSurface(surfaceNavd88);
+          debrisManager.updateWaterLevel(waterRenderer.getWaterSurfaceElevation());
+        } else {
+          debrisManager.updateWaterLevel(Number.NEGATIVE_INFINITY);
+        }
       }
     }
   }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+}
+
+let selectedBuildingMarker = null;
+
+async function handleBuildingClick(lat, lng, clickedElevation) {
+  const groundElev = waterRenderer.getGroundElevationAt(lat, lng);
+  if (groundElev === null) return;
+
+  const waterSurface = waterRenderer.getWaterSurfaceNavd88();
+  if (waterSurface === null) return;
+
+  const waterDepth = Math.max(0, waterSurface - groundElev);
+  const structureHeight = Math.max(0, clickedElevation - groundElev);
+
+  damagePanel.show();
+  damagePanel.setLoadingAddress();
+  damagePanel.setDamageInfo(lat, lng, waterDepth * 3.28084);
+
+  // Add visual marker or draped polygon
+  if (selectedBuildingMarker) {
+    viewer.entities.remove(selectedBuildingMarker);
+    selectedBuildingMarker = null;
+  }
+
+  // Create a loading state marker just in case the API takes a moment
+  selectedBuildingMarker = viewer.entities.add({
+    position: Cesium.Cartesian3.fromDegrees(lng, lat, clickedElevation),
+    point: {
+      pixelSize: 8,
+      color: Cesium.Color.RED,
+      outlineColor: Cesium.Color.WHITE,
+      outlineWidth: 2,
+      disableDepthTestDistance: Number.POSITIVE_INFINITY
+    }
+  });
+
+  let buildingName = null;
+  try {
+    const query = `[out:json];
+      (
+        way[building](around:50, ${lat}, ${lng});
+      );
+      out geom;`;
+    const overpassRes = await fetch('https://overpass-api.de/api/interpreter', {
+      method: 'POST',
+      body: `data=${encodeURIComponent(query)}`,
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Accept': 'application/json'
+      }
+    });
+
+    const overpassData = await overpassRes.json();
+
+    if (overpassData && overpassData.elements && overpassData.elements.length > 0) {
+      // Find the building that contains the click point, or fallback to the closest one
+      let selectedBuilding = overpassData.elements[0];
+
+      const isPointInPolygon = (pt, polygon) => {
+        let isInside = false;
+        for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+          const xi = polygon[i].lon, yi = polygon[i].lat;
+          const xj = polygon[j].lon, yj = polygon[j].lat;
+          const intersect = ((yi > pt.lat) !== (yj > pt.lat)) &&
+            (pt.lon < (xj - xi) * (pt.lat - yi) / (yj - yi) + xi);
+          if (intersect) isInside = !isInside;
+        }
+        return isInside;
+      };
+
+      for (const b of overpassData.elements) {
+        if (b.geometry && isPointInPolygon({ lat, lon: lng }, b.geometry)) {
+          selectedBuilding = b;
+          break; // Found containing building
+        }
+      }
+
+      if (selectedBuilding.geometry) {
+        const degreesArray = [];
+        selectedBuilding.geometry.forEach(node => {
+          degreesArray.push(node.lon, node.lat);
+        });
+
+        // Replace the point marker with a draped polygon!
+        viewer.entities.remove(selectedBuildingMarker);
+
+        selectedBuildingMarker = viewer.entities.add({
+          polygon: {
+            hierarchy: Cesium.Cartesian3.fromDegreesArray(degreesArray),
+            material: Cesium.Color.RED.withAlpha(0.4),
+            outline: true,
+            outlineColor: Cesium.Color.RED,
+            outlineWidth: 4,
+            classificationType: Cesium.ClassificationType.CESIUM_3D_TILE,
+            zIndex: 100 // Ensure it renders on top
+          }
+        });
+
+        if (selectedBuilding.tags && selectedBuilding.tags.name) {
+          buildingName = selectedBuilding.tags.name;
+        }
+      }
+    }
+  } catch (err) {
+    console.warn("Failed to fetch building footprint from Overpass:", err);
+  }
+
+  try {
+    const res = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json`);
+    const data = await res.json();
+    if (data && data.display_name) {
+      const address = data.display_name.split(',').slice(0, 3).join(', ');
+      damagePanel.setAddress(buildingName ? `${buildingName} (${address})` : address);
+    } else {
+      damagePanel.setAddress(buildingName || "Unknown Location");
+    }
+  } catch (e) {
+    damagePanel.setAddress(buildingName || "Location Unavailable");
+  }
 }
 
 function initUI() {
@@ -274,10 +421,23 @@ function initUI() {
       infoPanel.setWaterSurface(null);
       infoPanel.setOrigin(null);
       infoPanel.setGroundElevation(null);
+      if (damagePanel) damagePanel.hide();
+      if (selectedBuildingMarker) {
+        viewer.entities.remove(selectedBuildingMarker);
+        selectedBuildingMarker = null;
+      }
     },
   });
 
   infoPanel = new InfoPanel(viewer);
+  damagePanel = new DamagePanel(viewer, {
+    onClose: () => {
+      if (selectedBuildingMarker) {
+        viewer.entities.remove(selectedBuildingMarker);
+        selectedBuildingMarker = null;
+      }
+    }
+  });
   infoPanel.setLocation(currentLocation.name);
 }
 
@@ -313,18 +473,18 @@ async function spawnFlags(originLat, originLng, radiusKm) {
 
   const radiusMeters = radiusKm * 1000;
   const types = ['hospital', 'fire_station', 'school'];
-  const baseUrl = import.meta.env.DEV 
-    ? '/api/google-places/maps/api/place/nearbysearch/json' 
+  const baseUrl = import.meta.env.DEV
+    ? '/api/google-places/maps/api/place/nearbysearch/json'
     : 'https://hydroinformatics.tulane.edu/lab/cors/https://maps.googleapis.com/maps/api/place/nearbysearch/json';
 
   try {
-    const fetchPromises = types.map(type => 
+    const fetchPromises = types.map(type =>
       fetch(`${baseUrl}?location=${originLat},${originLng}&radius=${radiusMeters}&type=${type}&key=${GOOGLE_PLACES_API_KEY}`)
         .then(res => res.json())
     );
 
     const responses = await Promise.all(fetchPromises);
-    
+
     let allResults = [];
     responses.forEach(data => {
       if (data.status === 'OK' && data.results) {

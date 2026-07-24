@@ -345,6 +345,7 @@ export class Controls {
     } else {
       if (msg) {
         msg.classList.remove('loading');
+        msg.textContent = 'Click anywhere on the map to set water origin';
       }
     }
   }

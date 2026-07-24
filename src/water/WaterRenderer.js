@@ -26,8 +26,7 @@ export class WaterRenderer {
 
     this.waterPrimitive = null;
     this.markerEntity = null;
-    this.boundaryEntity = null;
-    this._previewEntities = null;
+    this._previewEntities = [];
     this.animatedPrimitives = [];
     this._swePrimitive = null;   // tracked separately for SWE animation double-buffer
 
@@ -148,9 +147,8 @@ export class WaterRenderer {
 
     this._hasAnimatedForCurrentOrigin = false;
 
-    // Replace preview with the active DEM grid boundary
+    // Remove the preview region once an origin is set
     this.removePreviewRegion();
-    this.showBoundary(lat, lng, radius);
   }
 
   /**
@@ -920,7 +918,6 @@ export class WaterRenderer {
     this.demData = null;
     this.demRadius = null;
     this._hasAnimatedForCurrentOrigin = false;
-    this.removeBoundary();
     this.removePreviewRegion();
   }
 
@@ -935,6 +932,32 @@ export class WaterRenderer {
 
   hasOrigin() {
     return this.originLat !== null && this.originLng !== null;
+  }
+
+  getOrigin() {
+    return { lat: this.originLat, lng: this.originLng, radius: this.demRadius };
+  }
+
+  getGroundElevationAt(lat, lng) {
+    if (!this.demData || !this.hasOrigin()) return null;
+
+    const latDiff = lat - this.originLat;
+    const lngDiff = lng - this.originLng;
+
+    const halfGrid = Math.floor(this.demData.grid.length / 2);
+    const cellSizeLat = this.demData.meta.cellSizeLat;
+    const cellSizeLng = this.demData.meta.cellSizeLng;
+
+    const rowOffset = Math.round(latDiff / cellSizeLat);
+    const colOffset = Math.round(lngDiff / cellSizeLng);
+
+    const r = halfGrid + rowOffset;
+    const c = halfGrid + colOffset;
+
+    if (r >= 0 && r < this.demData.grid.length && c >= 0 && c < this.demData.grid[0].length) {
+      return this.demData.grid[r][c];
+    }
+    return null;
   }
 
   getGroundElevation() { return this.groundEllipsoid; }
@@ -966,50 +989,6 @@ export class WaterRenderer {
     // Fallback: circular estimate
     const radiusKm = this.currentRadius * 111;
     return Math.PI * radiusKm * (radiusKm * 0.75);
-  }
-
-  // ─── Boundary Outline ───────────────────────────────────────
-
-  /**
-   * Show the active DEM grid boundary as a solid blue outline.
-   * Displayed after the user clicks and the DEM grid is fetched.
-   *
-   * @param {number} lat - Center latitude
-   * @param {number} lng - Center longitude
-   * @param {number} radiusDeg - Radius in degrees (half the region size)
-   */
-  showBoundary(lat, lng, radiusDeg) {
-    this.removeBoundary();
-
-    const cosLat = Math.cos(lat * Math.PI / 180);
-    const halfLng = radiusDeg / (cosLat || 1);
-
-    const positions = Cesium.Cartesian3.fromDegreesArray([
-      lng - halfLng, lat - radiusDeg,
-      lng + halfLng, lat - radiusDeg,
-      lng + halfLng, lat + radiusDeg,
-      lng - halfLng, lat + radiusDeg,
-      lng - halfLng, lat - radiusDeg,
-    ]);
-
-    this.boundaryEntity = this.viewer.entities.add({
-      polyline: {
-        positions,
-        width: 2,
-        material: Cesium.Color.fromCssColorString('rgba(74, 144, 217, 0.8)'),
-        clampToGround: true,
-      },
-    });
-  }
-
-  /**
-   * Remove the active boundary outline from the map.
-   */
-  removeBoundary() {
-    if (this.boundaryEntity) {
-      this.viewer.entities.remove(this.boundaryEntity);
-      this.boundaryEntity = null;
-    }
   }
 
   // ─── Preview Region (mesh overlay) ─────────────────────────
