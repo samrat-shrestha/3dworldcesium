@@ -150,7 +150,7 @@ export class WaterRenderer {
 
     // Remove the preview region once an origin is set
     this.removePreviewRegion();
-    
+
     // Add persistent sandbox wall around the grid
     this._updateSandboxWall(lat, lng, radius);
   }
@@ -324,7 +324,7 @@ export class WaterRenderer {
             this._swePrimitive = newPrim;
             if (oldPrim) this.viewer.scene.primitives.remove(oldPrim);
           }
-          
+
           if (this.debrisManager) {
             this.debrisManager.updateWaterLevel(this.groundEllipsoid + this.currentLevel, solver.h, meta);
           }
@@ -926,7 +926,7 @@ export class WaterRenderer {
     this.demRadius = null;
     this._hasAnimatedForCurrentOrigin = false;
     this.removePreviewRegion();
-    
+
     if (this._sandboxWallEntity) {
       this.viewer.entities.remove(this._sandboxWallEntity);
       this._sandboxWallEntity = null;
@@ -1048,9 +1048,9 @@ export class WaterRenderer {
         width: 2,
         height: groundElev - 50,
         extrudedHeight: groundElev + 8,
-        material: new Cesium.Color(0.1, 0.4, 0.9, 0.5), // Glassy blue wall
+        material: new Cesium.Color(0.45, 0.42, 0.38, 0.6),
         outline: true,
-        outlineColor: new Cesium.Color(0.1, 0.4, 0.9, 0.8)
+        outlineColor: new Cesium.Color(0.35, 0.32, 0.28, 0.85)
       }
     }));
 
@@ -1120,12 +1120,14 @@ export class WaterRenderer {
     let west, east, south, north;
     if (this.demData) {
       const meta = this.demData.meta;
-      const halfLat = (meta.rows * meta.cellSizeLat) / 2;
-      const halfLng = (meta.cols * meta.cellSizeLng) / 2;
-      west = meta.originLng - halfLng;
-      east = meta.originLng + halfLng;
-      south = meta.originLat - halfLat;
-      north = meta.originLat + halfLat;
+      const halfRows = Math.floor(meta.rows / 2);
+      const halfCols = Math.floor(meta.cols / 2);
+      // Must match _createWaterMeshPrimitive vertex positions exactly:
+      // vertex lat = originLat + (r - halfRows) * cellSizeLat, r ∈ [0, rows-1]
+      south = meta.originLat - halfRows * meta.cellSizeLat;
+      north = meta.originLat + (meta.rows - 1 - halfRows) * meta.cellSizeLat;
+      west = meta.originLng - halfCols * meta.cellSizeLng;
+      east = meta.originLng + (meta.cols - 1 - halfCols) * meta.cellSizeLng;
     } else {
       const cosLat = Math.cos(lat * Math.PI / 180);
       const halfLng = radius / (cosLat || 1);
@@ -1145,9 +1147,9 @@ export class WaterRenderer {
         width: 2,
         height: groundElev - 50,
         extrudedHeight: groundElev + 8,
-        material: new Cesium.Color(0.1, 0.4, 0.9, 0.5),
+        material: new Cesium.Color(0.9, 0.15, 0.1, 0.6),
         outline: true,
-        outlineColor: new Cesium.Color(0.1, 0.4, 0.9, 0.8)
+        outlineColor: new Cesium.Color(0.8, 0.1, 0.05, 0.85)
       }
     });
   }
