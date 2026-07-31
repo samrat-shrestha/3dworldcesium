@@ -48,6 +48,7 @@ export class WaterRenderer {
     this.demRadius = null;
     this._fetchingDEM = false;
     this._hasAnimatedForCurrentOrigin = false;
+    this._sandboxWallEntity = null;
   }
 
   /**
@@ -149,6 +150,9 @@ export class WaterRenderer {
 
     // Remove the preview region once an origin is set
     this.removePreviewRegion();
+    
+    // Add persistent sandbox wall around the grid
+    this._updateSandboxWall(lat, lng, radius);
   }
 
   /**
@@ -157,6 +161,9 @@ export class WaterRenderer {
    * @param {number} [radius=0.00362]
    */
   updateWater(waterLevelAboveGround, radius = 0.00362) {
+    if (Math.abs(radius - this.currentRadius) > 0.00001) {
+      this._updateSandboxWall(this.originLat, this.originLng, radius);
+    }
     this.currentLevel = waterLevelAboveGround;
     this.currentRadius = radius;
 
@@ -919,6 +926,11 @@ export class WaterRenderer {
     this.demRadius = null;
     this._hasAnimatedForCurrentOrigin = false;
     this.removePreviewRegion();
+    
+    if (this._sandboxWallEntity) {
+      this.viewer.entities.remove(this._sandboxWallEntity);
+      this._sandboxWallEntity = null;
+    }
   }
 
   clearWaterOnly() {
@@ -1001,8 +1013,9 @@ export class WaterRenderer {
    * @param {number} lat - Center latitude
    * @param {number} lng - Center longitude
    * @param {number} radiusDeg - Radius in degrees (half the region size)
+   * @param {number} [groundElev=0] - Estimated ground ellipsoid height
    */
-  showPreviewRegion(lat, lng, radiusDeg) {
+  showPreviewRegion(lat, lng, radiusDeg, groundElev = 0) {
     this.removePreviewRegion();
 
     const cosLat = Math.cos(lat * Math.PI / 180);
@@ -1026,16 +1039,19 @@ export class WaterRenderer {
       },
     }));
 
-    // Thick bold border
+    // Wall border
     this._previewEntities.push(this.viewer.entities.add({
-      polyline: {
+      corridor: {
         positions: Cesium.Cartesian3.fromDegreesArray([
           west, south, east, south, east, north, west, north, west, south,
         ]),
-        width: 5,
-        material: borderColor,
-        clampToGround: true,
-      },
+        width: 2,
+        height: groundElev - 50,
+        extrudedHeight: groundElev + 8,
+        material: new Cesium.Color(0.1, 0.4, 0.9, 0.5), // Glassy blue wall
+        outline: true,
+        outlineColor: new Cesium.Color(0.1, 0.4, 0.9, 0.8)
+      }
     }));
 
     // Net grid lines (8×8)
@@ -1093,5 +1109,46 @@ export class WaterRenderer {
       }
       this._previewEntities = null;
     }
+  }
+
+  _updateSandboxWall(lat, lng, radius) {
+    if (this._sandboxWallEntity) {
+      this.viewer.entities.remove(this._sandboxWallEntity);
+      this._sandboxWallEntity = null;
+    }
+
+    let west, east, south, north;
+    if (this.demData) {
+      const meta = this.demData.meta;
+      const halfLat = (meta.rows * meta.cellSizeLat) / 2;
+      const halfLng = (meta.cols * meta.cellSizeLng) / 2;
+      west = meta.originLng - halfLng;
+      east = meta.originLng + halfLng;
+      south = meta.originLat - halfLat;
+      north = meta.originLat + halfLat;
+    } else {
+      const cosLat = Math.cos(lat * Math.PI / 180);
+      const halfLng = radius / (cosLat || 1);
+      west = lng - halfLng;
+      east = lng + halfLng;
+      south = lat - radius;
+      north = lat + radius;
+    }
+
+    const groundElev = this.groundEllipsoid || 0;
+
+    this._sandboxWallEntity = this.viewer.entities.add({
+      corridor: {
+        positions: Cesium.Cartesian3.fromDegreesArray([
+          west, south, east, south, east, north, west, north, west, south,
+        ]),
+        width: 2,
+        height: groundElev - 50,
+        extrudedHeight: groundElev + 8,
+        material: new Cesium.Color(0.1, 0.4, 0.9, 0.5),
+        outline: true,
+        outlineColor: new Cesium.Color(0.1, 0.4, 0.9, 0.8)
+      }
+    });
   }
 }

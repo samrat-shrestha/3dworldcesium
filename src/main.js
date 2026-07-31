@@ -35,6 +35,7 @@ let debrisManager = null;
 let currentLocation = LOCATIONS[0]; // French Quarter
 let currentViewPreset = 'aerial';
 let activeFlagEntities = []; // store dynamically spawned flags
+let activePOIData = []; // store the metadata of POIs for click matching
 let previewTimeout = null; // auto-hide timer for region size preview
 
 // ─── Boot ────────────────────────────────────────────────────
@@ -110,13 +111,39 @@ function initClickHandler() {
 
         // Treat click as building inspect if inside radius AND water is active
         if (distanceM <= radiusM && controls.currentLevel > 0) {
-          isBuildingClick = true;
+          // Check if click is near an active POI (within ~40 meters)
+          let matchedPOI = null;
+          let minDistance = 40; // 40 meters tolerance
+
+          for (const poi of activePOIData) {
+            const poiCarto = Cesium.Cartographic.fromDegrees(poi.lng, poi.lat);
+            const poiGeodesic = new Cesium.EllipsoidGeodesic(poiCarto, clickCarto);
+            const dist = poiGeodesic.surfaceDistance;
+            if (dist < minDistance) {
+              minDistance = dist;
+              matchedPOI = poi;
+            }
+          }
+
+          // Alternatively, check if they explicitly clicked a flag entity
+          const pickedObject = viewer.scene.pick(movement.position);
+          if (Cesium.defined(pickedObject) && Cesium.defined(pickedObject.id)) {
+            const pickedPOI = activePOIData.find(p => p.entity === pickedObject.id);
+            if (pickedPOI) matchedPOI = pickedPOI;
+          }
+
+          if (matchedPOI) {
+            isBuildingClick = true;
+            // Overwrite the click coordinates with the exact POI coordinates
+            handleBuildingClick(matchedPOI.lat, matchedPOI.lng, clickedElevation, matchedPOI.name);
+          } else {
+            console.log("[HydroViz] Click ignored: Only active POIs (flags) are clickable.");
+            return; // Ignore clicks on normal buildings
+          }
         }
       }
 
-      if (isBuildingClick) {
-        handleBuildingClick(lat, lng, clickedElevation);
-      } else {
+      if (!isBuildingClick) {
         // Show loading state while fetching USGS elevation
         controls.setElevationLoading(true);
         waterRenderer.clearWaterOnly();
@@ -131,9 +158,6 @@ function initClickHandler() {
 
         // Spawn floating cars within the water radius, passing ground elevation to avoid buildings
         debrisManager.spawnDebris(lat, lng, controls.currentRadius * 111, 15, waterRenderer.getGroundElevation());
-
-        // Spawn flags dynamically on the ground around the clicked area
-        spawnFlags(lat, lng, controls.currentRadius * 111);
 
         // Hide loading
         controls.setElevationLoading(false);
@@ -164,31 +188,26 @@ function initClickHandler() {
 
 let selectedBuildingMarker = null;
 
-async function handleBuildingClick(lat, lng, clickedElevation) {
+async function handleBuildingClick(lat, lng, clickedElevation, presetBuildingName = null) {
   const groundElev = waterRenderer.getGroundElevationAt(lat, lng);
   if (groundElev === null) return;
 
   const waterSurface = waterRenderer.getWaterSurfaceNavd88();
   if (waterSurface === null) return;
 
-  const waterDepth = Math.max(0, waterSurface - groundElev);
-  const structureHeight = Math.max(0, clickedElevation - groundElev);
+  const waterDepth = waterSurface - groundElev;
+  if (waterDepth <= 0) return;
 
-  damagePanel.show();
-  damagePanel.setLoadingAddress();
-  damagePanel.setDamageInfo(lat, lng, waterDepth * 3.28084);
-
-  // Add visual marker or draped polygon
   if (selectedBuildingMarker) {
     viewer.entities.remove(selectedBuildingMarker);
     selectedBuildingMarker = null;
   }
 
-  // Create a loading state marker just in case the API takes a moment
+  // Draw a simple red point marker
   selectedBuildingMarker = viewer.entities.add({
     position: Cesium.Cartesian3.fromDegrees(lng, lat, clickedElevation),
     point: {
-      pixelSize: 8,
+      pixelSize: 12,
       color: Cesium.Color.RED,
       outlineColor: Cesium.Color.WHITE,
       outlineWidth: 2,
@@ -196,85 +215,25 @@ async function handleBuildingClick(lat, lng, clickedElevation) {
     }
   });
 
-  let buildingName = null;
-  try {
-    const query = `[out:json];
-      (
-        way[building](around:50, ${lat}, ${lng});
-      );
-      out geom;`;
-    const overpassRes = await fetch('https://overpass-api.de/api/interpreter', {
-      method: 'POST',
-      body: `data=${encodeURIComponent(query)}`,
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'Accept': 'application/json'
-      }
-    });
+  damagePanel.show();
+  damagePanel.setLoadingAddress();
+  damagePanel.setDamageInfo(lat, lng, waterDepth * 3.28084);
 
-    const overpassData = await overpassRes.json();
-
-    if (overpassData && overpassData.elements && overpassData.elements.length > 0) {
-      // Find the building that contains the click point, or fallback to the closest one
-      let selectedBuilding = overpassData.elements[0];
-
-      const isPointInPolygon = (pt, polygon) => {
-        let isInside = false;
-        for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
-          const xi = polygon[i].lon, yi = polygon[i].lat;
-          const xj = polygon[j].lon, yj = polygon[j].lat;
-          const intersect = ((yi > pt.lat) !== (yj > pt.lat)) &&
-            (pt.lon < (xj - xi) * (pt.lat - yi) / (yj - yi) + xi);
-          if (intersect) isInside = !isInside;
-        }
-        return isInside;
-      };
-
-      for (const b of overpassData.elements) {
-        if (b.geometry && isPointInPolygon({ lat, lon: lng }, b.geometry)) {
-          selectedBuilding = b;
-          break; // Found containing building
-        }
-      }
-
-      if (selectedBuilding.geometry) {
-        const degreesArray = [];
-        selectedBuilding.geometry.forEach(node => {
-          degreesArray.push(node.lon, node.lat);
-        });
-
-        // Replace the point marker with a draped polygon!
-        viewer.entities.remove(selectedBuildingMarker);
-
-        selectedBuildingMarker = viewer.entities.add({
-          polygon: {
-            hierarchy: Cesium.Cartesian3.fromDegreesArray(degreesArray),
-            material: Cesium.Color.RED.withAlpha(0.4),
-            outline: true,
-            outlineColor: Cesium.Color.RED,
-            outlineWidth: 4,
-            classificationType: Cesium.ClassificationType.CESIUM_3D_TILE,
-            zIndex: 100 // Ensure it renders on top
-          }
-        });
-
-        if (selectedBuilding.tags && selectedBuilding.tags.name) {
-          buildingName = selectedBuilding.tags.name;
-        }
-      }
-    }
-  } catch (err) {
-    console.warn("Failed to fetch building footprint from Overpass:", err);
-  }
+  let buildingName = presetBuildingName;
 
   try {
     const res = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json`);
     const data = await res.json();
+
     if (data && data.display_name) {
+      if (!buildingName && data.name) {
+        buildingName = data.name;
+      }
+
       const address = data.display_name.split(',').slice(0, 3).join(', ');
       damagePanel.setAddress(buildingName ? `${buildingName} (${address})` : address);
     } else {
-      damagePanel.setAddress(buildingName || "Unknown Location");
+      damagePanel.setAddress("Unknown Location");
     }
   } catch (e) {
     damagePanel.setAddress(buildingName || "Location Unavailable");
@@ -299,6 +258,19 @@ function initUI() {
       controls.setWaterSurface(surfaceNavd88);
       infoPanel.setWaterSurface(surfaceNavd88);
       debrisManager.updateWaterLevel(waterRenderer.getWaterSurfaceElevation());
+
+      if (level > 0 && activeFlagEntities.length === 0) {
+        const origin = waterRenderer.getOrigin();
+        spawnFlags(origin.lat, origin.lng, controls.currentRadius * 111);
+      } else if (level <= 0 && activeFlagEntities.length > 0) {
+        activeFlagEntities.forEach(f => viewer.entities.remove(f));
+        activeFlagEntities = [];
+        activePOIData = [];
+        if (selectedBuildingMarker) {
+          viewer.entities.remove(selectedBuildingMarker);
+          selectedBuildingMarker = null;
+        }
+      }
     },
 
     onRadiusChange: (radius) => {
@@ -307,20 +279,21 @@ function initUI() {
         // Clear any pending hide timer
         if (previewTimeout) clearTimeout(previewTimeout);
 
-        // Use pickEllipsoid (works even when 3D tiles cover the globe)
-        const center = viewer.camera.pickEllipsoid(
-          new Cesium.Cartesian2(
-            viewer.canvas.clientWidth / 2,
-            viewer.canvas.clientHeight / 2
-          ),
-          viewer.scene.globe.ellipsoid
+        const windowCenter = new Cesium.Cartesian2(
+          viewer.canvas.clientWidth / 2,
+          viewer.canvas.clientHeight / 2
         );
+        let center = viewer.scene.pickPosition(windowCenter);
+        if (!Cesium.defined(center)) {
+          center = viewer.camera.pickEllipsoid(windowCenter, viewer.scene.globe.ellipsoid);
+        }
         if (center) {
           const carto = Cesium.Cartographic.fromCartesian(center);
           waterRenderer.showPreviewRegion(
             Cesium.Math.toDegrees(carto.latitude),
             Cesium.Math.toDegrees(carto.longitude),
-            radius
+            radius,
+            carto.height || 0
           );
         }
 
@@ -470,6 +443,7 @@ async function spawnFlags(originLat, originLng, radiusKm) {
   // Clear old flags
   activeFlagEntities.forEach(f => viewer.entities.remove(f));
   activeFlagEntities = [];
+  activePOIData = [];
 
   const radiusMeters = radiusKm * 1000;
   const types = ['hospital', 'fire_station', 'school'];
@@ -522,30 +496,22 @@ async function spawnFlags(originLat, originLng, radiusKm) {
           name: name,
           description: `Facility Type: ${typeLabel}`,
           model: {
-            uri: './assets/models/flag.glb',
+            uri: './assets/models/red_flag.glb',
             scale: 2.0,
             minimumPixelSize: 96,
             maximumScale: 100.0,
-            color: Cesium.Color.fromCssColorString('#ff4444'),
+            color: Cesium.Color.RED,
             colorBlendMode: Cesium.ColorBlendMode.MIX,
-            colorBlendAmount: 0.5,
-          },
-          label: {
-            text: name,
-            font: 'bold 16px Inter, sans-serif',
-            fillColor: Cesium.Color.WHITE,
-            showBackground: true,
-            backgroundColor: new Cesium.Color(0.7, 0.1, 0.1, 0.9),
-            outlineColor: Cesium.Color.BLACK,
-            outlineWidth: 2,
-            style: Cesium.LabelStyle.FILL,
-            verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
-            pixelOffset: new Cesium.Cartesian2(0, -70),
-            distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 100000),
-            disableDepthTestDistance: Number.POSITIVE_INFINITY,
-          },
+            colorBlendAmount: 0.8,
+          }
         });
         activeFlagEntities.push(flag);
+        activePOIData.push({
+          name: name,
+          lat: result.geometry.location.lat,
+          lng: result.geometry.location.lng,
+          entity: flag
+        });
       }
     }
 
