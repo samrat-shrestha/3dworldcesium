@@ -21,6 +21,9 @@ import { DamagePanel } from './ui/DamagePanel.js';
 import { getSavedToken, showTokenModal } from './ui/TokenModal.js';
 import { FirstPersonControls } from './navigation/FirstPersonControls.js';
 import { FloatingDebrisManager } from './water/FloatingDebrisManager.js';
+import { loadNSIData, findNearestBuilding, getAllBuildings, mapOccupancyClass } from './services/NSIService.js';
+import { getDamageEstimate } from './data/DepthDamageCurves.js';
+import { hazardFromFlow } from './water/HazardRating.js';
 
 // ─── State ───────────────────────────────────────────────────
 let viewer = null;
@@ -37,6 +40,7 @@ let currentViewPreset = 'aerial';
 let activeFlagEntities = []; // store dynamically spawned flags
 let activePOIData = []; // store the metadata of POIs for click matching
 let previewTimeout = null; // auto-hide timer for region size preview
+let pendingRiskFlagRequest = null; // risk flags waiting on the flow to settle
 
 // ─── Boot ────────────────────────────────────────────────────
 async function boot() {
@@ -52,8 +56,20 @@ async function boot() {
     // We will spawn flags dynamically on click instead of at boot
     elevationService = new ElevationService();
     waterRenderer = new WaterRenderer(viewer, elevationService);
+    // Risk flags are placed only once the water has settled, so they can be
+    // classified with real depth×velocity from the start.
+    waterRenderer.onFlowSettled = () => {
+      if (!pendingRiskFlagRequest) return;
+      const req = pendingRiskFlagRequest;
+      pendingRiskFlagRequest = null;
+      spawnRiskFlags(req.lat, req.lng, req.radiusKm);
+    };
     fpControls = new FirstPersonControls(viewer);
     debrisManager = new FloatingDebrisManager(viewer);
+
+    // Fire-and-forget: NSI building data (~5MB) loads in the background.
+    // findNearestBuilding() returns null gracefully until it's ready.
+    loadNSIData();
 
     initUI();
     initClickHandler();
@@ -147,6 +163,10 @@ function initClickHandler() {
         // Show loading state while fetching USGS elevation
         controls.setElevationLoading(true);
         waterRenderer.clearWaterOnly();
+        // Origin is moving — drop any flag request still waiting on the
+        // cancelled animation, or it would place flags at the old origin.
+        pendingRiskFlagRequest = null;
+        selectedBuilding = null;
         if (damagePanel) damagePanel.hide();
         if (selectedBuildingMarker) {
           viewer.entities.remove(selectedBuildingMarker);
@@ -187,6 +207,42 @@ function initClickHandler() {
 }
 
 let selectedBuildingMarker = null;
+let selectedBuilding = null; // { lat, lng } of the building shown in the panel
+
+/**
+ * Recompute the open damage panel's figures for the currently selected
+ * building. Used after the water level changes, so the panel doesn't keep
+ * showing numbers for the previous level. Skips reverse-geocoding — the
+ * address hasn't changed, and re-fetching on every slider move would
+ * hammer Nominatim.
+ */
+function refreshDamagePanelForSelection() {
+  if (!selectedBuilding) return;
+  const { lat, lng } = selectedBuilding;
+
+  const groundElev = waterRenderer.getGroundElevationAt(lat, lng);
+  const waterSurface = waterRenderer.getWaterSurfaceNavd88();
+  if (groundElev === null || waterSurface === null) return;
+
+  const staticDepth = waterSurface - groundElev;
+  const flowState = waterRenderer.getFlowStateAt(lat, lng);
+  const waterDepth = (flowState && !flowState.stale) ? flowState.depth : staticDepth;
+
+  if (waterDepth <= 0) {
+    // This building is dry at the new level — the panel no longer applies.
+    damagePanel.hide();
+    selectedBuilding = null;
+    if (selectedBuildingMarker) {
+      viewer.entities.remove(selectedBuildingMarker);
+      selectedBuildingMarker = null;
+    }
+    return;
+  }
+
+  damagePanel.setDamageInfo(
+    lat, lng, waterDepth * 3.28084, flowState, findNearestBuilding(lat, lng)
+  );
+}
 
 async function handleBuildingClick(lat, lng, clickedElevation, presetBuildingName = null) {
   const groundElev = waterRenderer.getGroundElevationAt(lat, lng);
@@ -195,7 +251,14 @@ async function handleBuildingClick(lat, lng, clickedElevation, presetBuildingNam
   const waterSurface = waterRenderer.getWaterSurfaceNavd88();
   if (waterSurface === null) return;
 
-  const waterDepth = waterSurface - groundElev;
+  const staticDepth = waterSurface - groundElev;
+  if (staticDepth <= 0) return;
+
+  const flowState = waterRenderer.getFlowStateAt(lat, lng);
+  // Prefer the solver's own per-cell depth (accounts for local terrain
+  // variation within the flooded region) over the flat water-surface
+  // estimate, when a simulation has actually run here.
+  const waterDepth = (flowState && !flowState.stale) ? flowState.depth : staticDepth;
   if (waterDepth <= 0) return;
 
   if (selectedBuildingMarker) {
@@ -215,9 +278,11 @@ async function handleBuildingClick(lat, lng, clickedElevation, presetBuildingNam
     }
   });
 
+  selectedBuilding = { lat, lng };
   damagePanel.show();
   damagePanel.setLoadingAddress();
-  damagePanel.setDamageInfo(lat, lng, waterDepth * 3.28084);
+  const nsiMatch = findNearestBuilding(lat, lng);
+  damagePanel.setDamageInfo(lat, lng, waterDepth * 3.28084, flowState, nsiMatch);
 
   let buildingName = presetBuildingName;
 
@@ -259,13 +324,20 @@ function initUI() {
       infoPanel.setWaterSurface(surfaceNavd88);
       debrisManager.updateWaterLevel(waterRenderer.getWaterSurfaceElevation());
 
-      if (level > 0 && activeFlagEntities.length === 0) {
+      if (level > 0) {
+        // Re-evaluate on every level change: which buildings are riskiest,
+        // and their hazard colours, both depend on the water level. Without
+        // this, flags keep the old level's ranking — and since only flagged
+        // buildings are clickable, newly at-risk ones become uninspectable.
         const origin = waterRenderer.getOrigin();
-        spawnFlags(origin.lat, origin.lng, controls.currentRadius * 111);
-      } else if (level <= 0 && activeFlagEntities.length > 0) {
+        scheduleRiskFlags(origin.lat, origin.lng, controls.currentRadius * 111);
+      } else {
+        pendingRiskFlagRequest = null;
         activeFlagEntities.forEach(f => viewer.entities.remove(f));
         activeFlagEntities = [];
         activePOIData = [];
+        selectedBuilding = null;
+        if (damagePanel) damagePanel.hide();
         if (selectedBuildingMarker) {
           viewer.entities.remove(selectedBuildingMarker);
           selectedBuildingMarker = null;
@@ -386,8 +458,11 @@ function initUI() {
     onClear: () => {
       waterRenderer.clear();
       debrisManager.clear();
+      pendingRiskFlagRequest = null;
       activeFlagEntities.forEach(f => viewer.entities.remove(f));
       activeFlagEntities = [];
+      activePOIData = [];
+      selectedBuilding = null;
       debrisManager.updateWaterLevel(Number.NEGATIVE_INFINITY);
       infoPanel.setWaterLevel(0);
       infoPanel.setFloodArea(0);
@@ -436,88 +511,134 @@ function showError(message) {
   `;
 }
 
-// ─── Dynamic Flags (Google Places API) ───────────────────────
-const GOOGLE_PLACES_API_KEY = 'AIzaSyA6A821SVHUtMukcDMnZK7OXSw8MxwTGck';
+// ─── Dynamic Flags (top-5 riskiest NSI buildings by estimated loss) ──
+const RISK_FLAG_COUNT = 5;
+const currencyFmt = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
 
-async function spawnFlags(originLat, originLng, radiusKm) {
+async function spawnRiskFlags(originLat, originLng, radiusKm) {
   // Clear old flags
   activeFlagEntities.forEach(f => viewer.entities.remove(f));
   activeFlagEntities = [];
   activePOIData = [];
 
-  const radiusMeters = radiusKm * 1000;
-  const types = ['hospital', 'fire_station', 'school'];
-  const baseUrl = import.meta.env.DEV
-    ? '/api/google-places/maps/api/place/nearbysearch/json'
-    : 'https://hydroinformatics.tulane.edu/lab/cors/https://maps.googleapis.com/maps/api/place/nearbysearch/json';
+  await loadNSIData(); // resolves immediately if already loaded
+  const allBuildings = getAllBuildings();
+  if (allBuildings.length === 0) {
+    console.log('[HydroViz] No NSI building data available for risk flags.');
+    return;
+  }
 
-  try {
-    const fetchPromises = types.map(type =>
-      fetch(`${baseUrl}?location=${originLat},${originLng}&radius=${radiusMeters}&type=${type}&key=${GOOGLE_PLACES_API_KEY}`)
-        .then(res => res.json())
-    );
+  const waterSurfaceNavd88 = waterRenderer.getWaterSurfaceNavd88();
+  if (waterSurfaceNavd88 === null) return;
 
-    const responses = await Promise.all(fetchPromises);
+  const radiusM = radiusKm * 1000;
+  const cosLat = Math.cos(originLat * Math.PI / 180);
 
-    let allResults = [];
-    responses.forEach(data => {
-      if (data.status === 'OK' && data.results) {
-        allResults.push(...data.results);
-      }
+  // Rank every nearby building with COMPLETE metadata by estimated total
+  // loss (structural + content) at the current water level — combines
+  // real building value with real flood depth there.
+  const candidates = [];
+  for (const b of allBuildings) {
+    if (b.occtype == null || b.found_ht == null || b.val_struct == null || b.val_cont == null || b.sqft == null) continue;
+
+    const dLatM = (b.lat - originLat) * 111320;
+    const dLngM = (b.lng - originLng) * 111320 * cosLat;
+    if (Math.sqrt(dLatM * dLatM + dLngM * dLngM) > radiusM) continue;
+
+    const groundElev = waterRenderer.getGroundElevationAt(b.lat, b.lng);
+    if (groundElev === null) continue;
+
+    // Mirror handleBuildingClick/DamagePanel exactly, so a flag's colour can
+    // never disagree with the panel that opens when you click it.
+    const flowState = waterRenderer.getFlowStateAt(b.lat, b.lng);
+    const staticDepthFt = (waterSurfaceNavd88 - groundElev) * 3.28084;
+    const depthFt = (flowState && !flowState.stale)
+      ? flowState.depth * 3.28084
+      : staticDepthFt;
+    if (depthFt <= 0) continue; // dry — not at risk
+
+    const occupancy = mapOccupancyClass(b.occtype);
+    const estimate = getDamageEstimate(occupancy, depthFt, {
+      foundationHeightFt: b.found_ht,
+      replacementValueUSD: b.val_struct,
+      contentValueUSD: b.val_cont,
     });
 
-    if (allResults.length === 0) {
-      console.log('[HydroViz] No critical infrastructure found in this radius.');
-      return;
-    }
+    const hazard = hazardFromFlow(depthFt * 0.3048, flowState);
 
-    // Limit to 10 to not spam the map
-    allResults = allResults.slice(0, 10);
+    candidates.push({
+      building: b,
+      occupancy,
+      depthFt,
+      hazard,
+      totalLossUSD: estimate.structuralUSD + estimate.contentUSD,
+    });
+  }
 
-    const cartographics = [];
-    for (let i = 0; i < allResults.length; i++) {
-      const loc = allResults[i].geometry.location;
-      cartographics.push(Cesium.Cartographic.fromDegrees(loc.lng, loc.lat));
-    }
+  if (candidates.length === 0) {
+    console.log('[HydroViz] No at-risk buildings with complete NSI data found in this radius.');
+    return;
+  }
 
-    // Sample the precise ground/building height from the loaded 3D Tiles
-    const sampled = await viewer.scene.sampleHeightMostDetailed(cartographics);
+  candidates.sort((a, b) => b.totalLossUSD - a.totalLossUSD);
+  const topRisk = candidates.slice(0, RISK_FLAG_COUNT);
 
-    for (let i = 0; i < sampled.length; i++) {
-      const carto = sampled[i];
-      const result = allResults[i];
+  const cartographics = topRisk.map(c => Cesium.Cartographic.fromDegrees(c.building.lng, c.building.lat));
+  const sampled = await viewer.scene.sampleHeightMostDetailed(cartographics);
 
-      const name = result.name || 'FACILITY';
-      const typeLabel = result.types ? result.types[0].replace('_', ' ').toUpperCase() : 'INFRASTRUCTURE';
+  for (let i = 0; i < sampled.length; i++) {
+    const carto = sampled[i];
+    const c = topRisk[i];
+    if (!carto || carto.height === undefined || isNaN(carto.height)) continue;
 
-      if (carto && carto.height !== undefined && !isNaN(carto.height)) {
-        const flag = viewer.entities.add({
-          position: Cesium.Cartesian3.fromRadians(carto.longitude, carto.latitude, carto.height),
-          name: name,
-          description: `Facility Type: ${typeLabel}`,
-          model: {
-            uri: './assets/models/red_flag.glb',
-            scale: 2.0,
-            minimumPixelSize: 96,
-            maximumScale: 100.0,
-            color: Cesium.Color.RED,
-            colorBlendMode: Cesium.ColorBlendMode.MIX,
-            colorBlendAmount: 0.8,
-          }
-        });
-        activeFlagEntities.push(flag);
-        activePOIData.push({
-          name: name,
-          lat: result.geometry.location.lat,
-          lng: result.geometry.location.lng,
-          entity: flag
-        });
+    const lossLabel = currencyFmt.format(c.totalLossUSD);
+    const flag = viewer.entities.add({
+      position: Cesium.Cartesian3.fromRadians(carto.longitude, carto.latitude, carto.height),
+      name: `${c.hazard.code} ${c.hazard.label} — ${c.occupancy} — Est. Loss ${lossLabel}`,
+      description: `Hazard: ${c.hazard.code} ${c.hazard.label} — Occupancy: ${c.occupancy} — Depth: ${c.depthFt.toFixed(1)} ft — Est. Loss: ${lossLabel}`,
+      model: {
+        uri: './assets/models/red_flag.glb',
+        scale: 2.0,
+        minimumPixelSize: 96,
+        maximumScale: 100.0,
+        color: Cesium.Color.fromCssColorString(c.hazard.color),
+        colorBlendMode: Cesium.ColorBlendMode.MIX,
+        colorBlendAmount: 0.8,
       }
-    }
+    });
+    activeFlagEntities.push(flag);
+    activePOIData.push({
+      // No real building name from NSI (unlike the old Google Places
+      // facility names) — leave null so the address line falls back to
+      // the reverse-geocoded street address instead of the risk label.
+      name: null,
+      lat: c.building.lat,
+      lng: c.building.lng,
+      entity: flag
+    });
+  }
 
-    console.log(`[HydroViz] Spawned ${activeFlagEntities.length} real infrastructure flags.`);
-  } catch (e) {
-    console.warn('[HydroViz] Failed to fetch or place flags:', e);
+  console.log(`[HydroViz] Spawned ${activeFlagEntities.length} risk flags (top ${topRisk.length} of ${candidates.length} candidates by estimated loss).`);
+
+  // Keep an open damage panel in sync with the level these flags reflect.
+  refreshDamagePanelForSelection();
+}
+
+/**
+ * Request risk flags for a region, deferring until the water has settled.
+ *
+ * Hazard class depends on depth×velocity, and velocity only exists once the
+ * SWE animation has finished. Spawning mid-animation would force a depth-only
+ * approximation that can disagree with the damage panel — so if a flow
+ * animation is running, wait for WaterRenderer's onFlowSettled instead.
+ */
+function scheduleRiskFlags(lat, lng, radiusKm) {
+  if (waterRenderer.isAnimating()) {
+    pendingRiskFlagRequest = { lat, lng, radiusKm };
+  } else {
+    // Water is already static (e.g. level changed after the initial
+    // animation) — safe to place immediately.
+    spawnRiskFlags(lat, lng, radiusKm);
   }
 }
 

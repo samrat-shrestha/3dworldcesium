@@ -17,6 +17,9 @@ const USGS_DIRECT_URL = 'https://epqs.nationalmap.gov/v1/json';
 const GOOGLE_PROXY_URL = '/api/google-elevation/maps/api/elevation/json';
 const GOOGLE_DIRECT_URL = 'https://maps.googleapis.com/maps/api/elevation/json';
 const GOOGLE_ELEVATION_API_KEY = import.meta.env.VITE_GOOGLE_ELEVATION_API_KEY || '';
+if (!GOOGLE_ELEVATION_API_KEY) {
+  console.warn('[ElevationService] ⚠️ VITE_GOOGLE_ELEVATION_API_KEY is not set! DEM grid and elevation lookups will fail. Create a .env file with this key.');
+}
 
 export class ElevationService {
   constructor() {
@@ -208,6 +211,7 @@ export class ElevationService {
         // Flatten the array of arrays into a single list
         batchResults.forEach(elevations => allElevations.push(...elevations));
       } catch (error) {
+        console.warn('[ElevationService] DEM grid batch fetch failed:', error.message);
         return null;
       }
 

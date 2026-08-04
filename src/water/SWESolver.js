@@ -52,6 +52,15 @@ export class SWESolver {
     this._hu = this._zeros();
     this._hv = this._zeros();
 
+    // Peak fields — max depth/speed ever reached at each cell over the run.
+    // Used for hazard classification (D×V), which is defined on event peaks,
+    // not instantaneous values. Callers that seed the solver with an
+    // artificial startup pulse (e.g. a dam-break initial condition) should
+    // call resetPeaks() once that transient has settled, so these reflect
+    // sustained flow rather than a numerical startup spike.
+    this.peakDepth = this._zeros();
+    this.peakSpeed = this._zeros();
+
     // Wall mask for BFS confinement (1 = wall, 0 = fluid)
     this.isWall = [];
     for (let r = 0; r < this.rows; r++) {
@@ -74,6 +83,8 @@ export class SWESolver {
           this.hu[r][c] = 0;
           this.hv[r][c] = 0;
         }
+        this.peakDepth[r][c] = 0;
+        this.peakSpeed[r][c] = 0;
       }
     }
   }
@@ -204,6 +215,15 @@ export class SWESolver {
         this._h[r][c] = h_new;
         this._hu[r][c] = hu_new;
         this._hv[r][c] = hv_new;
+
+        // Track peak depth/speed for hazard classification
+        if (h_new > this.peakDepth[r][c]) this.peakDepth[r][c] = h_new;
+        if (h_new > MIN_DEPTH) {
+          const speed = Math.sqrt(
+            (hu_new / h_new) * (hu_new / h_new) + (hv_new / h_new) * (hv_new / h_new)
+          );
+          if (speed > this.peakSpeed[r][c]) this.peakSpeed[r][c] = speed;
+        }
       }
     }
 
@@ -298,6 +318,28 @@ export class SWESolver {
       }
     }
     return out;
+  }
+
+  /**
+   * Peak depth/speed reached at a given cell over the simulation so far.
+   * @param {number} r
+   * @param {number} c
+   * @returns {{peakDepth: number, peakSpeed: number}|null}
+   */
+  getPeakAt(r, c) {
+    if (r < 0 || r >= this.rows || c < 0 || c >= this.cols) return null;
+    return { peakDepth: this.peakDepth[r][c], peakSpeed: this.peakSpeed[r][c] };
+  }
+
+  /**
+   * Zero out peak depth/speed without touching h/hu/hv or the wall mask.
+   * Call this once a startup transient (e.g. dam-break relaxation, or a
+   * forced injection period) has finished, so peaks measured afterward
+   * reflect sustained flow rather than that transient.
+   */
+  resetPeaks() {
+    this.peakDepth = this._zeros();
+    this.peakSpeed = this._zeros();
   }
 
   /** Total water volume (m³). */

@@ -49,6 +49,16 @@ export class WaterRenderer {
     this._fetchingDEM = false;
     this._hasAnimatedForCurrentOrigin = false;
     this._sandboxWallEntity = null;
+
+    // Retained SWE solver — holds peak depth/speed fields after the
+    // flow animation finishes, for hazard classification at click time.
+    this.solver = null;
+    this.solverLevel = null;
+
+    // Optional callback, fired once the SWE animation has finished and the
+    // solver's peak fields are final. Set by consumers that need real
+    // velocity (not just depth) to classify hazard.
+    this.onFlowSettled = null;
   }
 
   /**
@@ -257,6 +267,8 @@ export class WaterRenderer {
     // ─── Create SWE solver ───
     const solver = new SWESolver(this.demData.grid, meta);
     solver.setMask(finalFloodedCells);
+    this.solver = solver;
+    this.solverLevel = waterLevelAboveGround;
 
     // Tiny initial source: just the centre cell + immediate neighbours
     // so the user sees water EMERGE from the click point
@@ -288,6 +300,7 @@ export class WaterRenderer {
     const renderGap = 60;  // ms between visual updates (~15 fps)
     let lastRenderTime = 0;
     let renderFrame = 0;
+    let peaksResetAfterInjection = false;
 
     const animate = (timestamp) => {
       if (!this.animationId) return;
@@ -309,6 +322,16 @@ export class WaterRenderer {
 
         // Advance physics (CFL-safe sub-steps)
         solver.advance(simToAdvance, 40);
+
+        // The dam-break seed + forced injection above create an artificial
+        // startup transient (peak speeds far above sustained flow). Once
+        // injection ends, reset peak tracking so peakDepth/peakSpeed reflect
+        // only the settling phase that follows — the physically meaningful
+        // regime, and the one that matches the final rendered water state.
+        if (!peaksResetAfterInjection && solver.simTime >= injectionEnd) {
+          solver.resetPeaks();
+          peaksResetAfterInjection = true;
+        }
       }
 
       // ─── Visual update (throttled) ───
@@ -365,6 +388,11 @@ export class WaterRenderer {
               // instead of snapping to the BFS steady-state, which causes a visual jump
               this.waterPrimitive = this._createWaterMeshPrimitive(solver.h, false, false);
             }
+
+            // Peak depth/velocity fields are now final for this event —
+            // consumers (e.g. risk-flag colouring) can classify hazard with
+            // real velocity instead of a depth-only approximation.
+            if (this.onFlowSettled) this.onFlowSettled();
           });
         });
       }
@@ -925,6 +953,8 @@ export class WaterRenderer {
     this.demData = null;
     this.demRadius = null;
     this._hasAnimatedForCurrentOrigin = false;
+    this.solver = null;
+    this.solverLevel = null;
     this.removePreviewRegion();
 
     if (this._sandboxWallEntity) {
@@ -940,17 +970,28 @@ export class WaterRenderer {
     }
     this._removeWater();
     this.currentLevel = 0;
+    this.solver = null;
+    this.solverLevel = null;
   }
 
   hasOrigin() {
     return this.originLat !== null && this.originLng !== null;
   }
 
+  /** True while a flow animation is in progress (water not yet settled). */
+  isAnimating() {
+    return this.animationId !== null;
+  }
+
   getOrigin() {
     return { lat: this.originLat, lng: this.originLng, radius: this.demRadius };
   }
 
-  getGroundElevationAt(lat, lng) {
+  /**
+   * Map a lat/lng to its {r, c} cell in the cached DEM grid, or null if
+   * there's no DEM data yet or the point falls outside the grid.
+   */
+  _latLngToCell(lat, lng) {
     if (!this.demData || !this.hasOrigin()) return null;
 
     const latDiff = lat - this.originLat;
@@ -967,9 +1008,47 @@ export class WaterRenderer {
     const c = halfGrid + colOffset;
 
     if (r >= 0 && r < this.demData.grid.length && c >= 0 && c < this.demData.grid[0].length) {
-      return this.demData.grid[r][c];
+      return { r, c };
     }
     return null;
+  }
+
+  getGroundElevationAt(lat, lng) {
+    const cell = this._latLngToCell(lat, lng);
+    if (!cell) return null;
+    return this.demData.grid[cell.r][cell.c];
+  }
+
+  /**
+   * Depth/peak-flow state at a lat/lng from the retained SWE solver.
+   * Returns null if no solver has run yet (e.g. static BFS-only rendering,
+   * or the flow animation was never triggered for the current origin).
+   *
+   * `stale: true` means the water level slider has moved since the solver
+   * last ran, so peakDepth/peakSpeed describe a different event than what's
+   * currently displayed.
+   *
+   * @param {number} lat
+   * @param {number} lng
+   * @returns {{depth: number, peakDepth: number, peakSpeed: number, stale: boolean}|null}
+   */
+  getFlowStateAt(lat, lng) {
+    if (!this.solver) return null;
+    const cell = this._latLngToCell(lat, lng);
+    if (!cell) return null;
+
+    const peak = this.solver.getPeakAt(cell.r, cell.c);
+    if (!peak) return null;
+
+    const stale = this.solverLevel === null ||
+      Math.abs(this.currentLevel - this.solverLevel) > 0.01;
+
+    return {
+      depth: this.solver.h[cell.r][cell.c],
+      peakDepth: peak.peakDepth,
+      peakSpeed: peak.peakSpeed,
+      stale,
+    };
   }
 
   getGroundElevation() { return this.groundEllipsoid; }
