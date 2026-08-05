@@ -19,16 +19,54 @@ let buildings = null;
 let loadPromise = null;
 
 /**
- * Map an NSI occupancy code (e.g. "RES1-1SNB", "COM4", "GOV2") onto the
- * three occupancy buckets DepthDamageCurves has curves for.
+ * Map an NSI occupancy code (e.g. "RES1-1SNB", "COM4", "GOV2", "RES3A") onto
+ * an occupancy type that has a depth-damage curve in curves.json.
+ *
+ * curves.json contains curves for: RES1–RES6, COM1–COM9, IND1–IND6, AGR1,
+ * GOV1–GOV2, EDU1–EDU2, REL1.
+ *
+ * NSI occtypes can include suffixes like "-1SNB" (stories/basement) or letter
+ * suffixes like "RES3A"–"RES3F". We strip those to match the base type, then
+ * fall back to a sensible default in the same category if the exact base type
+ * isn't found.
  */
+
+// Set of occupancy types that have curves in curves.json
+const CURVE_OCCUPANCY_TYPES = new Set([
+  'RES1', 'RES2', 'RES3', 'RES4', 'RES5', 'RES6',
+  'COM1', 'COM2', 'COM3', 'COM4', 'COM5', 'COM6', 'COM7', 'COM8', 'COM9',
+  'IND1', 'IND2', 'IND3', 'IND4', 'IND5', 'IND6',
+  'AGR1',
+  'GOV1', 'GOV2',
+  'EDU1', 'EDU2',
+  'REL1',
+]);
+
 export function mapOccupancyClass(occtype) {
   if (!occtype) return 'RES1';
-  const prefix = occtype.split('-')[0];
-  if (prefix.startsWith('RES')) return 'RES1';
-  if (prefix.startsWith('GOV') || prefix.startsWith('EDU') || prefix.startsWith('REL')) return 'GOV1';
-  return 'COM1'; // COM*, IND*, AGR*, etc.
+
+  // Strip dash-suffixes first: "RES1-1SNB" → "RES1"
+  const beforeDash = occtype.split('-')[0];
+
+  // Check if the full prefix is a known curve type (e.g. "COM4", "GOV2")
+  if (CURVE_OCCUPANCY_TYPES.has(beforeDash)) return beforeDash;
+
+  // Strip trailing letters for subtypes: "RES3A" → "RES3", "RES3F" → "RES3"
+  const baseMatch = beforeDash.match(/^([A-Z]+\d+)/);
+  if (baseMatch && CURVE_OCCUPANCY_TYPES.has(baseMatch[1])) return baseMatch[1];
+
+  // Fall back by category prefix
+  if (beforeDash.startsWith('RES')) return 'RES1';
+  if (beforeDash.startsWith('COM')) return 'COM1';
+  if (beforeDash.startsWith('IND')) return 'IND1';
+  if (beforeDash.startsWith('GOV')) return 'GOV1';
+  if (beforeDash.startsWith('EDU')) return 'EDU1';
+  if (beforeDash.startsWith('REL')) return 'REL1';
+  if (beforeDash.startsWith('AGR')) return 'AGR1';
+
+  return 'RES1'; // ultimate fallback
 }
+
 
 /**
  * Fetch and cache the trimmed NSI dataset. Safe to call multiple times —

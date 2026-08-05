@@ -1,64 +1,129 @@
 /**
  * DepthDamageCurves — depth-damage functions for building loss estimation.
  *
- * Curve shapes follow the general form of FEMA/HAZUS-MH depth-damage
- * functions (one-story, no-basement, credibility-weighted) for the three
- * occupancy classes the app already labels buildings with: RES1
- * (single-family residential), COM1 (commercial), GOV1 (government).
+ * Loads real depth-damage curve data from public/data/curves.json, which
+ * contains per-occupancy-type breakpoints for structural and content damage
+ * percentages at integer depth values (ft above first-floor elevation).
  *
- * IMPORTANT — these are illustrative approximations of published curve
- * shapes, not the official FEMA tables (which require a licensed HAZUS-MH
- * dataset to reproduce exactly). Good enough to make relative comparisons
- * (this building vs that one, this depth vs that depth) meaningful; not a
- * substitute for a certified HAZUS loss study.
+ * The curves.json file covers 27 occupancy types: RES1–RES6, COM1–COM9,
+ * IND1–IND6, AGR1, GOV1–GOV2, EDU1–EDU2, REL1. Linear interpolation is
+ * used between breakpoints; values outside the range clamp to the nearest
+ * endpoint.
  *
  * Depth is measured relative to the FIRST-FLOOR ELEVATION, not ground.
  * A default foundation height is subtracted from ground-relative depth
  * before lookup — see DEFAULT_FOUNDATION_HEIGHT_FT.
  */
 
-export const OCCUPANCY_TYPES = ['RES1', 'COM1', 'GOV1'];
-
-// Typical raised-foundation height for the region (New Orleans slab/pier
-// construction commonly sits 1-2 ft above grade). Used when a real
-// first-floor elevation isn't available.
 export const DEFAULT_FOUNDATION_HEIGHT_FT = 1.5;
 
-// Assumed replacement value per building, used only to turn a damage
-// percentage into a dollar figure. No real valuation or footprint data is
-// available, so these are single flat placeholders per occupancy type.
+// Assumed replacement value per building when real NSI data isn't available.
 const REPLACEMENT_VALUE_USD = {
-  RES1: 200000,
-  COM1: 750000,
-  GOV1: 1000000,
+  RES1: 200000, RES2: 180000, RES3: 300000, RES4: 500000, RES5: 400000, RES6: 350000,
+  COM1: 750000, COM2: 600000, COM3: 500000, COM4: 800000, COM5: 700000,
+  COM6: 900000, COM7: 600000, COM8: 1000000, COM9: 800000,
+  IND1: 900000, IND2: 850000, IND3: 800000, IND4: 750000, IND5: 700000, IND6: 650000,
+  AGR1: 400000,
+  GOV1: 1000000, GOV2: 900000,
+  EDU1: 1200000, EDU2: 800000,
+  REL1: 600000,
 };
 
-// Content value as a fraction of structure replacement value (HAZUS default
-// convention: 50% for residential, 100% for commercial/government).
+// Content value as fraction of structure replacement value.
 const CONTENT_VALUE_RATIO = {
-  RES1: 0.5,
-  COM1: 1.0,
-  GOV1: 1.0,
+  RES1: 0.5, RES2: 0.5, RES3: 0.5, RES4: 0.5, RES5: 0.5, RES6: 0.5,
+  COM1: 1.0, COM2: 1.0, COM3: 1.0, COM4: 1.0, COM5: 1.0,
+  COM6: 1.0, COM7: 1.0, COM8: 1.0, COM9: 1.0,
+  IND1: 1.0, IND2: 1.0, IND3: 1.0, IND4: 1.0, IND5: 1.0, IND6: 1.0,
+  AGR1: 0.5,
+  GOV1: 1.0, GOV2: 1.0,
+  EDU1: 1.0, EDU2: 1.0,
+  REL1: 1.0,
 };
 
-// Breakpoints: [depthAboveFirstFloorFt, damagePercent]. Linear interpolation
-// between points; clamped to the first/last value outside the range.
-const CURVES = {
-  RES1: {
-    structure: [[-2, 0], [0, 9], [2, 22], [4, 32], [6, 44], [10, 58], [16, 72], [24, 80]],
-    content: [[-2, 0], [0, 8], [2, 21], [4, 33], [6, 45], [10, 61], [16, 75], [24, 85]],
-  },
-  COM1: {
-    structure: [[-2, 0], [0, 5], [2, 15], [4, 23], [6, 30], [10, 42], [16, 55], [24, 65]],
-    content: [[-2, 0], [0, 9], [2, 20], [4, 31], [6, 38], [10, 50], [16, 62], [24, 70]],
-  },
-  GOV1: {
-    structure: [[-2, 0], [0, 6], [2, 16], [4, 24], [6, 31], [10, 43], [16, 56], [24, 66]],
-    content: [[-2, 0], [0, 10], [2, 22], [4, 33], [6, 40], [10, 52], [16, 64], [24, 72]],
-  },
-};
+// ─── Parsed curve data ───────────────────────────────────────────────
+// Maps occupancy → { structure: [[depth, pct], …], content: [[depth, pct], …] }
+let CURVES = null;
+let curvesLoadPromise = null;
+
+const CURVES_URL = `${import.meta.env.BASE_URL}data/curves.json`;
+
+/**
+ * Load and parse curves.json into the CURVES lookup table.
+ * Safe to call multiple times — subsequent calls share the same promise.
+ * @returns {Promise<Object>}
+ */
+export function loadCurvesData() {
+  if (CURVES) return Promise.resolve(CURVES);
+  if (curvesLoadPromise) return curvesLoadPromise;
+
+  curvesLoadPromise = fetch(CURVES_URL)
+    .then((res) => {
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    })
+    .then((data) => {
+      CURVES = parseCurvesJSON(data);
+      console.log(`[DepthDamageCurves] Loaded curves for ${Object.keys(CURVES).length} occupancy types`);
+      return CURVES;
+    })
+    .catch((error) => {
+      console.warn('[DepthDamageCurves] Failed to load curves.json, using empty fallback:', error.message);
+      CURVES = {};
+      return CURVES;
+    });
+
+  return curvesLoadPromise;
+}
+
+/**
+ * Parse the raw curves.json data into the CURVES lookup format.
+ * Each entry has { occupancy, depth, cont_dam_per, struct_dam_per } with string values.
+ * @param {{ curves: Array<{occupancy: string, depth: string, cont_dam_per: string, struct_dam_per: string}> }} data
+ * @returns {Object}
+ */
+function parseCurvesJSON(data) {
+  const curves = {};
+
+  for (const entry of data.curves) {
+    const occ = entry.occupancy;
+    if (!curves[occ]) {
+      curves[occ] = { structure: [], content: [] };
+    }
+    const depth = parseFloat(entry.depth);
+    curves[occ].structure.push([depth, parseFloat(entry.struct_dam_per)]);
+    curves[occ].content.push([depth, parseFloat(entry.cont_dam_per)]);
+  }
+
+  // Sort each curve's breakpoints by depth (should already be sorted, but be safe)
+  for (const occ of Object.keys(curves)) {
+    curves[occ].structure.sort((a, b) => a[0] - b[0]);
+    curves[occ].content.sort((a, b) => a[0] - b[0]);
+  }
+
+  return curves;
+}
+
+/**
+ * Check whether curves data has been loaded.
+ * @returns {boolean}
+ */
+export function isCurvesDataLoaded() {
+  return CURVES !== null;
+}
+
+/**
+ * Get the list of occupancy types that have curve data.
+ * @returns {string[]}
+ */
+export function getAvailableOccupancyTypes() {
+  return CURVES ? Object.keys(CURVES) : [];
+}
+
+// ─── Interpolation ───────────────────────────────────────────────────
 
 function interpolate(points, x) {
+  if (!points || points.length === 0) return 0;
   if (x <= points[0][0]) return points[0][1];
   if (x >= points[points.length - 1][0]) return points[points.length - 1][1];
 
@@ -76,13 +141,19 @@ function interpolate(points, x) {
 /**
  * Damage percent (0-100) for an occupancy type at a given depth above the
  * first-floor elevation.
- * @param {string} occupancy - 'RES1' | 'COM1' | 'GOV1'
+ * @param {string} occupancy - Any occupancy type from curves.json (e.g. 'RES1', 'COM4', 'IND2')
  * @param {number} depthAboveFirstFloorFt
  * @param {'structure'|'content'} kind
  * @returns {number}
  */
 export function getDamagePercent(occupancy, depthAboveFirstFloorFt, kind) {
-  const curve = CURVES[occupancy] || CURVES.RES1;
+  if (!CURVES) {
+    console.warn('[DepthDamageCurves] Curves data not loaded yet — returning 0');
+    return 0;
+  }
+  // Fall back to RES1 if occupancy type not found in curves data
+  const curve = CURVES[occupancy] || CURVES['RES1'];
+  if (!curve) return 0;
   return interpolate(curve[kind], depthAboveFirstFloorFt);
 }
 
@@ -94,7 +165,7 @@ export function getDamagePercent(occupancy, depthAboveFirstFloorFt, kind) {
  * foundation height and dollar values become the building's actual values
  * instead of a flat estimate for its occupancy class.
  *
- * @param {string} occupancy - 'RES1' | 'COM1' | 'GOV1'
+ * @param {string} occupancy - Any occupancy type from curves.json
  * @param {number} depthAboveGroundFt
  * @param {Object} [opts]
  * @param {number} [opts.foundationHeightFt] - Real first-floor height, if known

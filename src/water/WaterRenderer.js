@@ -528,11 +528,11 @@ export class WaterRenderer {
         baseWaterColor: new Cesium.Color(0.02, 0.15, 0.6, 0.85),
         blendColor: new Cesium.Color(0.02, 0.15, 0.6, 0.85),
         normalMap: Cesium.buildModuleUrl('Assets/Textures/waterNormals.jpg'),
-        frequency: 8000.0,
-        fadeFactor: 100000.0,
+        frequency: 1000.0,
+        fadeFactor: 1000.0,
         animationSpeed: 0.008,
-        amplitude: 6.0,
-        specularIntensity: 0.4,
+        amplitude: 8.0,
+        specularIntensity: 0.6,
       });
     }
 
@@ -574,11 +574,11 @@ export class WaterRenderer {
       baseWaterColor: new Cesium.Color(0.02, 0.15, 0.6, 0.85),
       blendColor: new Cesium.Color(0.02, 0.15, 0.6, 0.85),
       normalMap: Cesium.buildModuleUrl('Assets/Textures/waterNormals.jpg'),
-      frequency: 8000.0,
-      fadeFactor: 100000.0, // Fade out normal map at distance to prevent aliasing
-      animationSpeed: 0.008, // Greatly reduced to make the water look calmer and slower
-      amplitude: 6.0, // Reduced from 8.0 to make the waves less intense
-      specularIntensity: 0.4, // Raised slightly to give it that realistic glint, but not blinding
+      frequency: 1000.0,
+      fadeFactor: 1000.0,
+      animationSpeed: 0.008,
+      amplitude: 8.0,
+      specularIntensity: 0.6,
     });
 
     this.waterPrimitive = this.viewer.scene.primitives.add(
@@ -630,11 +630,11 @@ export class WaterRenderer {
       baseWaterColor: new Cesium.Color(0.02, 0.15, 0.6, 0.85),
       blendColor: new Cesium.Color(0.02, 0.15, 0.6, 0.85),
       normalMap: Cesium.buildModuleUrl('Assets/Textures/waterNormals.jpg'),
-      frequency: 8000.0,
-      fadeFactor: 100000.0,
+      frequency: 1000.0,
+      fadeFactor: 1000.0,
       animationSpeed: 0.008,
-      amplitude: 6.0,
-      specularIntensity: 0.4,
+      amplitude: 8.0,
+      specularIntensity: 0.6,
     });
 
     this.waterPrimitive = this.viewer.scene.primitives.add(
@@ -685,11 +685,11 @@ export class WaterRenderer {
       baseWaterColor: new Cesium.Color(0.02, 0.15, 0.6, 0.85),
       blendColor: new Cesium.Color(0.02, 0.15, 0.6, 0.85),
       normalMap: Cesium.buildModuleUrl('Assets/Textures/waterNormals.jpg'),
-      frequency: 8000.0,
-      fadeFactor: 100000.0,
+      frequency: 1000.0,
+      fadeFactor: 1000.0,
       animationSpeed: 0.008,
-      amplitude: 6.0,
-      specularIntensity: 0.4,
+      amplitude: 8.0,
+      specularIntensity: 0.6,
     });
 
     return this.viewer.scene.primitives.add(
@@ -1226,9 +1226,9 @@ export class WaterRenderer {
         width: 2,
         height: groundElev - 50,
         extrudedHeight: groundElev + 8,
-        material: new Cesium.Color(0.9, 0.15, 0.1, 0.6),
+        material: new Cesium.Color(0.1, 0.85, 0.3, 0.6),
         outline: true,
-        outlineColor: new Cesium.Color(0.8, 0.1, 0.05, 0.85)
+        outlineColor: new Cesium.Color(0.05, 0.7, 0.2, 0.85)
       }
     });
   }

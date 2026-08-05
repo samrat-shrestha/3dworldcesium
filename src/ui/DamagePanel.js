@@ -18,36 +18,51 @@ export class DamagePanel {
         <button class="damage-close-btn" id="damageCloseBtn">&times;</button>
       </div>
 
-      <div class="info-section">
-        <h4 class="section-heading">Building Information</h4>
-        <div class="info-row"><span class="info-label">Building ID:</span> <span class="info-value" id="damageBuildingId">Loading...</span></div>
-        <div class="info-row"><span class="info-label">Occupancy Type:</span> <span class="info-value" id="damageOccupancyType">GOV1</span></div>
-        <div class="info-row" id="damageSqftRow" style="display: none;"><span class="info-label">Square Footage:</span> <span class="info-value" id="damageSqft">—</span></div>
-        <div class="info-row"><span class="info-label">Address:</span> <span class="info-value" id="damageAddress">Loading...</span></div>
-        <div class="info-row"><span class="info-label">Coordinates:</span> <span class="info-value" id="damageCoords" style="font-family: monospace; font-size: 0.75rem;">—</span></div>
+      <div id="damagePromptMessage" style="display: none; padding: 20px 8px; text-align: center;">
+        <div style="font-size: 1.6rem; margin-bottom: 12px;">🏠</div>
+        <div style="font-size: 0.9rem; color: var(--text-primary, #fff); font-weight: 500; margin-bottom: 8px;">Flood simulation complete</div>
+        <div style="font-size: 0.8rem; color: var(--text-secondary, #aaa); line-height: 1.5;">Click on any highlighted building marker to view its damage estimation report.</div>
       </div>
 
-      <div class="info-section">
-        <h4 class="section-heading">Flood Conditions</h4>
-        <div class="info-row"><span class="info-label">Flood Depth:</span> <span class="info-value" id="damageFloodDepth">—</span></div>
-        <div class="info-row"><span class="info-label">Flow Velocity:</span> <span class="info-value" id="damageVelocity">—</span></div>
+      <div id="damageNoDataMessage" style="display: none; padding: 20px 8px; text-align: center;">
+        <div style="font-size: 1.6rem; margin-bottom: 12px;">📋</div>
+        <div style="font-size: 0.9rem; color: var(--text-primary, #fff); font-weight: 500; margin-bottom: 8px;">Information Not Available</div>
+        <div style="font-size: 0.8rem; color: var(--text-secondary, #aaa); line-height: 1.5;">No building data was found in the National Structure Inventory for this location.</div>
+        <div id="damageNoDataCoords" style="font-size: 0.72rem; color: var(--text-secondary, #777); margin-top: 12px; font-family: monospace;"></div>
       </div>
 
-      <div class="info-section">
-        <h4 class="section-heading">Damage Summary</h4>
-        <div class="info-row"><span class="info-label">Structural Loss:</span> <span class="info-value" id="damageStructuralLoss">—</span></div>
-        <div class="info-row"><span class="info-label">Content Loss:</span> <span class="info-value" id="damageContentLoss">—</span></div>
-      </div>
-
-      <div class="info-section" style="margin-top: 16px; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 12px; margin-bottom: 0px;">
-        <div class="info-row" style="align-items: center; gap: 8px;">
-          <span class="info-label" style="width: auto; flex: 1 1 auto;">Hazard Class:</span>
-          <span class="info-value" id="damageSeverity" style="font-weight: 600; padding: 4px 8px; border-radius: 4px; font-size: 0.8rem; text-align: center; width: auto; white-space: nowrap; word-break: normal; flex: 0 0 auto;">—</span>
+      <div id="damageContent">
+        <div class="info-section">
+          <h4 class="section-heading">Building Information</h4>
+          <div class="info-row"><span class="info-label">Building ID:</span> <span class="info-value" id="damageBuildingId">Loading...</span></div>
+          <div class="info-row"><span class="info-label">Occupancy Type:</span> <span class="info-value" id="damageOccupancyType">GOV1</span></div>
+          <div class="info-row" id="damageSqftRow" style="display: none;"><span class="info-label">Square Footage:</span> <span class="info-value" id="damageSqft">—</span></div>
+          <div class="info-row"><span class="info-label">Address:</span> <span class="info-value" id="damageAddress">Loading...</span></div>
+          <div class="info-row"><span class="info-label">Coordinates:</span> <span class="info-value" id="damageCoords" style="font-family: monospace; font-size: 0.75rem;">—</span></div>
         </div>
-        <div class="info-row" id="damageSeverityDesc" style="font-size: 0.72rem; color: var(--text-secondary, #999); margin-top: 4px;"></div>
-      </div>
 
-      <div class="info-section" id="damageAssumptions" style="margin-top: 8px; padding-top: 8px; border-top: 1px dashed rgba(255,255,255,0.1); font-size: 0.68rem; color: var(--text-secondary, #888); line-height: 1.5;"></div>
+        <div class="info-section">
+          <h4 class="section-heading">Flood Conditions</h4>
+          <div class="info-row"><span class="info-label">Flood Depth:</span> <span class="info-value" id="damageFloodDepth">—</span></div>
+          <div class="info-row"><span class="info-label">Flow Velocity:</span> <span class="info-value" id="damageVelocity">—</span></div>
+        </div>
+
+        <div class="info-section">
+          <h4 class="section-heading">Damage Summary</h4>
+          <div class="info-row"><span class="info-label">Structural Loss:</span> <span class="info-value" id="damageStructuralLoss">—</span></div>
+          <div class="info-row"><span class="info-label">Content Loss:</span> <span class="info-value" id="damageContentLoss">—</span></div>
+        </div>
+
+        <div class="info-section" style="margin-top: 16px; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 12px; margin-bottom: 0px;">
+          <div class="info-row" style="align-items: center; gap: 8px;">
+            <span class="info-label" style="width: auto; flex: 1 1 auto;">Hazard Class:</span>
+            <span class="info-value" id="damageSeverity" style="font-weight: 600; padding: 4px 8px; border-radius: 4px; font-size: 0.8rem; text-align: center; width: auto; white-space: nowrap; word-break: normal; flex: 0 0 auto;">—</span>
+          </div>
+          <div class="info-row" id="damageSeverityDesc" style="font-size: 0.72rem; color: var(--text-secondary, #999); margin-top: 4px;"></div>
+        </div>
+
+        <div class="info-section" id="damageAssumptions" style="margin-top: 8px; padding-top: 8px; border-top: 1px dashed rgba(255,255,255,0.1); font-size: 0.68rem; color: var(--text-secondary, #888); line-height: 1.5;"></div>
+      </div>
     `;
 
     document.getElementById('damageCloseBtn').addEventListener('click', () => {
@@ -62,6 +77,30 @@ export class DamagePanel {
 
   hide() {
     this.panel.style.display = 'none';
+  }
+
+  /**
+   * Show the panel in "prompt" mode — a friendly message telling the user
+   * to click on building markers to see damage info.
+   */
+  showPrompt() {
+    document.getElementById('damagePromptMessage').style.display = 'block';
+    document.getElementById('damageNoDataMessage').style.display = 'none';
+    document.getElementById('damageContent').style.display = 'none';
+    this.show();
+  }
+
+  /**
+   * Show the panel in "no data" mode — when no NSI record exists for the
+   * clicked location.
+   */
+  showNoData(lat, lng) {
+    document.getElementById('damagePromptMessage').style.display = 'none';
+    document.getElementById('damageNoDataMessage').style.display = 'block';
+    document.getElementById('damageContent').style.display = 'none';
+    document.getElementById('damageNoDataCoords').textContent =
+      `${lat.toFixed(5)}°, ${lng.toFixed(5)}°`;
+    this.show();
   }
 
   setAddress(address) {
@@ -86,6 +125,11 @@ export class DamagePanel {
    *   building was found within match distance — falls back to an inferred estimate.
    */
   setDamageInfo(lat, lng, depthFt, flowState = null, nsiMatch = null) {
+    // Switch to full content mode
+    document.getElementById('damagePromptMessage').style.display = 'none';
+    document.getElementById('damageNoDataMessage').style.display = 'none';
+    document.getElementById('damageContent').style.display = 'block';
+
     document.getElementById('damageCoords').textContent = `${lat.toFixed(5)}°, ${lng.toFixed(5)}°`;
     document.getElementById('damageFloodDepth').textContent = `${depthFt.toFixed(1)} ft`;
 
@@ -159,12 +203,12 @@ export class DamagePanel {
       assumptionsEl.innerHTML =
         `Matched to a USACE National Structure Inventory record ${nsiMatch.distanceM.toFixed(0)}m away — ` +
         `using its real foundation height (${estimate.foundationHeightFt.toFixed(1)} ft) and replacement value ` +
-        `(${fmt.format(estimate.replacementValueUSD)}). Damage % from HAZUS-MH-style depth-damage curves. ` +
+        `(${fmt.format(estimate.replacementValueUSD)}). Damage % from depth-damage curves. ` +
         (flowState ? '' : 'Flow velocity unavailable — no simulation has run for this location.');
     } else {
       assumptionsEl.innerHTML =
         `No NSI building record within 50m — occupancy is inferred and values are placeholder ` +
-        `estimates. Damage % uses HAZUS-MH-style depth-damage curves relative to an assumed ` +
+        `estimates. Damage % uses depth-damage curves relative to an assumed ` +
         `first-floor elevation of ${estimate.foundationHeightFt.toFixed(1)} ft above grade, against a ` +
         `placeholder replacement value of ${fmt.format(estimate.replacementValueUSD)}. ` +
         (flowState ? '' : 'Flow velocity unavailable — no simulation has run for this location.');
