@@ -21,7 +21,7 @@ export class DamagePanel {
       <div id="damagePromptMessage" style="display: none; padding: 20px 8px; text-align: center;">
         <div style="font-size: 1.6rem; margin-bottom: 12px;">🏠</div>
         <div style="font-size: 0.9rem; color: var(--text-primary, #fff); font-weight: 500; margin-bottom: 8px;">Flood simulation complete</div>
-        <div style="font-size: 0.8rem; color: var(--text-secondary, #aaa); line-height: 1.5;">Click on any highlighted building marker to view its damage estimation report.</div>
+        <div style="font-size: 0.8rem; color: var(--text-secondary, #aaa); line-height: 1.5;">Click on any building to view its damage estimation report.</div>
       </div>
 
       <div id="damageNoDataMessage" style="display: none; padding: 20px 8px; text-align: center;">
@@ -51,6 +51,10 @@ export class DamagePanel {
           <h4 class="section-heading">Damage Summary</h4>
           <div class="info-row"><span class="info-label">Structural Loss:</span> <span class="info-value" id="damageStructuralLoss">—</span></div>
           <div class="info-row"><span class="info-label">Content Loss:</span> <span class="info-value" id="damageContentLoss">—</span></div>
+          <div class="info-row" style="margin-top: 4px; border-top: 1px dashed rgba(255,255,255,0.06); padding-top: 4px;">
+            <span class="info-label" style="font-weight: 700;">Total Loss:</span>
+            <span class="info-value" id="damageTotalLoss" style="font-weight: 700; color: #ff6b6b;">—</span>
+          </div>
         </div>
 
         <div class="info-section" style="margin-top: 16px; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 12px; margin-bottom: 0px;">
@@ -79,10 +83,6 @@ export class DamagePanel {
     this.panel.style.display = 'none';
   }
 
-  /**
-   * Show the panel in "prompt" mode — a friendly message telling the user
-   * to click on building markers to see damage info.
-   */
   showPrompt() {
     document.getElementById('damagePromptMessage').style.display = 'block';
     document.getElementById('damageNoDataMessage').style.display = 'none';
@@ -90,10 +90,6 @@ export class DamagePanel {
     this.show();
   }
 
-  /**
-   * Show the panel in "no data" mode — when no NSI record exists for the
-   * clicked location.
-   */
   showNoData(lat, lng) {
     document.getElementById('damagePromptMessage').style.display = 'none';
     document.getElementById('damageNoDataMessage').style.display = 'block';
@@ -114,15 +110,9 @@ export class DamagePanel {
   /**
    * @param {number} lat
    * @param {number} lng
-   * @param {number} depthFt - Water depth above ground, in feet
-   * @param {{depth: number, peakDepth: number, peakSpeed: number, stale: boolean}|null} [flowState]
-   *   Solver-derived flow state at this location, from WaterRenderer.getFlowStateAt().
-   *   Null when no SWE simulation has run for the current origin.
-   * @param {{occupancy: string, rawOcctype: string|null, foundationHeightFt: number|null,
-   *   structuralValueUSD: number|null, contentValueUSD: number|null, sqft: number|null,
-   *   distanceM: number}|null} [nsiMatch]
-   *   Real building record from NSIService.findNearestBuilding(). Null when no NSI
-   *   building was found within match distance — falls back to an inferred estimate.
+   * @param {number} depthFt
+   * @param {Object|null} flowState
+   * @param {Object|null} nsiMatch
    */
   setDamageInfo(lat, lng, depthFt, flowState = null, nsiMatch = null) {
     // Switch to full content mode
@@ -133,8 +123,6 @@ export class DamagePanel {
     document.getElementById('damageCoords').textContent = `${lat.toFixed(5)}°, ${lng.toFixed(5)}°`;
     document.getElementById('damageFloodDepth').textContent = `${depthFt.toFixed(1)} ft`;
 
-    // Building ID is always synthetic — NSI doesn't ship a stable ID in the
-    // trimmed dataset. Occupancy and sqft use the real match when available.
     const bId = Math.floor(Math.abs(lat * lng * 10000)) % 10000;
     document.getElementById('damageBuildingId').textContent = bId;
 
@@ -153,9 +141,8 @@ export class DamagePanel {
       sqftRow.style.display = 'none';
     }
 
-    // ─── Flow velocity (from SWE solver peak fields) ───
+    // ─── Flow velocity ───
     const velocityEl = document.getElementById('damageVelocity');
-
     if (flowState) {
       const speedFtPerSec = flowState.peakSpeed * M_TO_FT;
       velocityEl.style.opacity = flowState.stale ? '0.55' : '1';
@@ -169,7 +156,7 @@ export class DamagePanel {
       velocityEl.textContent = depthFt > 0.1 ? 'No flow data' : '0.0 ft/s';
     }
 
-    // ─── Damage estimate (depth-damage curves, with real NSI values when matched) ───
+    // ─── Damage estimate ───
     const estimateOpts = {};
     if (nsiMatch) {
       if (nsiMatch.foundationHeightFt != null) estimateOpts.foundationHeightFt = nsiMatch.foundationHeightFt;
@@ -186,7 +173,10 @@ export class DamagePanel {
       ? `${fmt.format(estimate.contentUSD)} (${estimate.contentPercent.toFixed(0)}%)`
       : fmt.format(0);
 
-    // ─── Hazard classification (depth × velocity) ───
+    const totalLoss = estimate.structuralUSD + estimate.contentUSD;
+    document.getElementById('damageTotalLoss').textContent = fmt.format(totalLoss);
+
+    // ─── Hazard classification ───
     const hazard = hazardFromFlow(depthFt / M_TO_FT, flowState);
     const severityEl = document.getElementById('damageSeverity');
     const descEl = document.getElementById('damageSeverityDesc');
@@ -201,17 +191,14 @@ export class DamagePanel {
     const assumptionsEl = document.getElementById('damageAssumptions');
     if (nsiMatch) {
       assumptionsEl.innerHTML =
-        `Matched to a USACE National Structure Inventory record ${nsiMatch.distanceM.toFixed(0)}m away — ` +
-        `using its real foundation height (${estimate.foundationHeightFt.toFixed(1)} ft) and replacement value ` +
-        `(${fmt.format(estimate.replacementValueUSD)}). Damage % from depth-damage curves. ` +
-        (flowState ? '' : 'Flow velocity unavailable — no simulation has run for this location.');
+        `Matched to a USACE NSI record ${nsiMatch.distanceM.toFixed(0)}m away — ` +
+        `foundation height: ${estimate.foundationHeightFt.toFixed(1)} ft, ` +
+        `replacement value: ${fmt.format(estimate.replacementValueUSD)}. `;
     } else {
       assumptionsEl.innerHTML =
-        `No NSI building record within 50m — occupancy is inferred and values are placeholder ` +
-        `estimates. Damage % uses depth-damage curves relative to an assumed ` +
-        `first-floor elevation of ${estimate.foundationHeightFt.toFixed(1)} ft above grade, against a ` +
-        `placeholder replacement value of ${fmt.format(estimate.replacementValueUSD)}. ` +
-        (flowState ? '' : 'Flow velocity unavailable — no simulation has run for this location.');
+        `No NSI record within 50m — values are estimated. ` +
+        `Foundation: ${estimate.foundationHeightFt.toFixed(1)} ft, ` +
+        `replacement: ${fmt.format(estimate.replacementValueUSD)}. `;
     }
   }
 }

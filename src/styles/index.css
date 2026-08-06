@@ -698,6 +698,8 @@ input[type="range"]:disabled::-moz-range-thumb {
   right: 16px;
   z-index: 1000;
   width: 380px;
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
   background: var(--bg-panel);
   backdrop-filter: blur(16px);
   border: 1px solid var(--border);
@@ -706,6 +708,17 @@ input[type="range"]:disabled::-moz-range-thumb {
   padding: 16px 20px;
   animation: slideDown 0.3s cubic-bezier(0.16, 1, 0.3, 1) 0.1s both;
   font-family: 'Inter', system-ui, sans-serif;
+}
+
+.damage-panel::-webkit-scrollbar {
+  width: 4px;
+}
+.damage-panel::-webkit-scrollbar-track {
+  background: transparent;
+}
+.damage-panel::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.12);
+  border-radius: 2px;
 }
 
 @keyframes slideDown {
@@ -784,6 +797,346 @@ input[type="range"]:disabled::-moz-range-thumb {
   color: #ff6b6b;
   font-weight: 600;
 }
+
+/* ============================================================
+   MITIGATION PANEL (left of damage panel)
+   ============================================================ */
+.mitigation-panel {
+  position: fixed;
+  top: 16px;
+  right: 408px;
+  z-index: 1000;
+  width: 340px;
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+  background: var(--bg-panel);
+  backdrop-filter: blur(16px);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-panel);
+  padding: 16px 18px;
+  animation: slideDown 0.3s cubic-bezier(0.16, 1, 0.3, 1) 0.15s both;
+  font-family: 'Inter', system-ui, sans-serif;
+}
+
+.mitigation-panel::-webkit-scrollbar {
+  width: 4px;
+}
+.mitigation-panel::-webkit-scrollbar-track {
+  background: transparent;
+}
+.mitigation-panel::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.12);
+  border-radius: 2px;
+}
+
+.mitigation-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid rgba(255,255,255,0.1);
+}
+
+.mitigation-header-icon {
+  font-size: 1.4rem;
+  line-height: 1;
+}
+
+.mitigation-header-title {
+  font-weight: 700;
+  font-size: 0.95rem;
+  color: var(--text-primary);
+}
+
+.mitigation-header-sub {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  opacity: 0.6;
+}
+
+.mitigation-close-btn {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 1.4rem;
+  line-height: 1;
+  transition: color 0.2s ease, transform 0.2s ease;
+}
+.mitigation-close-btn:hover {
+  color: #fff;
+  transform: scale(1.1);
+}
+
+.mitigation-prompt {
+  text-align: center;
+  padding: 16px 8px;
+}
+.mitigation-prompt-icon {
+  font-size: 1.4rem;
+  margin-bottom: 8px;
+}
+.mitigation-prompt-text {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  opacity: 0.7;
+  line-height: 1.5;
+}
+
+/* Building info bar */
+.mitigation-building-info {
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+}
+
+.mit-building-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.78rem;
+}
+.mit-building-row + .mit-building-row {
+  margin-top: 4px;
+}
+.mit-building-label {
+  color: var(--text-muted);
+  opacity: 0.6;
+}
+.mit-building-value {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.mit-damage-value {
+  color: #ff6b6b !important;
+}
+
+/* Options list */
+.mitigation-options-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.mitigation-empty {
+  text-align: center;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  opacity: 0.5;
+  padding: 12px;
+}
+
+/* Option card */
+.mit-option-card {
+  background: rgba(255,255,255,0.025);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 8px;
+  padding: 10px 12px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.mit-option-card:hover {
+  background: rgba(255,255,255,0.05);
+  border-color: rgba(255,255,255,0.15);
+  transform: translateY(-1px);
+}
+.mit-option-card.mit-selected {
+  background: rgba(92, 184, 92, 0.06);
+  border-color: rgba(92, 184, 92, 0.3);
+  box-shadow: 0 0 12px rgba(92, 184, 92, 0.08);
+}
+
+.mit-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.mit-card-type {
+  font-size: 0.78rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 4px;
+  border: 1px solid;
+}
+
+.mit-card-bcr {
+  font-size: 0.68rem;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+.mit-bcr-good {
+  color: #5cb85c;
+  background: rgba(92, 184, 92, 0.12);
+}
+.mit-bcr-ok {
+  color: #e8a838;
+  background: rgba(232, 168, 56, 0.12);
+}
+.mit-bcr-poor {
+  color: #ff6b6b;
+  background: rgba(255, 107, 107, 0.12);
+}
+
+/* Effectiveness bar */
+.mit-card-effectiveness {
+  margin-bottom: 8px;
+}
+.mit-eff-bar-track {
+  height: 4px;
+  background: rgba(255,255,255,0.06);
+  border-radius: 2px;
+  overflow: hidden;
+  margin-bottom: 3px;
+}
+.mit-eff-bar-fill {
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.4s ease;
+}
+.mit-eff-label {
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  opacity: 0.6;
+}
+
+/* Cost row */
+.mit-card-costs {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+.mit-cost-item {
+  display: flex;
+  flex-direction: column;
+}
+.mit-cost-label {
+  font-size: 0.62rem;
+  color: var(--text-muted);
+  opacity: 0.5;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.mit-cost-value {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.mit-saves {
+  color: #5cb85c !important;
+}
+
+/* Impact detail */
+.mitigation-impact {
+  background: rgba(92, 184, 92, 0.04);
+  border: 1px solid rgba(92, 184, 92, 0.15);
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.mit-impact-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+.mit-impact-title {
+  font-weight: 700;
+  font-size: 0.85rem;
+  color: #5cb85c;
+}
+.mit-remove-btn {
+  background: none;
+  border: 1px solid rgba(255,255,255,0.12);
+  color: var(--text-muted);
+  opacity: 0.6;
+  cursor: pointer;
+  font-size: 0.68rem;
+  padding: 3px 8px;
+  border-radius: 4px;
+  transition: all 0.2s;
+}
+.mit-remove-btn:hover {
+  border-color: #ff6b6b;
+  color: #ff6b6b;
+  opacity: 1;
+}
+
+/* Before/After comparison */
+.mit-impact-comparison {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+.mit-compare-col {
+  flex: 1;
+}
+.mit-compare-label {
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  opacity: 0.5;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  margin-bottom: 2px;
+}
+.mit-compare-amount {
+  font-size: 0.88rem;
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+.mit-compare-before .mit-compare-amount {
+  color: #ff6b6b;
+}
+.mit-compare-after .mit-compare-amount {
+  color: #5cb85c;
+}
+.mit-compare-bar {
+  height: 4px;
+  background: rgba(255,255,255,0.06);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.mit-compare-bar-fill {
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.4s ease;
+}
+.mit-compare-arrow {
+  color: var(--text-muted);
+  opacity: 0.3;
+  font-size: 0.9rem;
+  padding-top: 12px;
+}
+
+/* Stats grid */
+.mit-impact-stats {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.mit-stat {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.76rem;
+}
+.mit-stat-label {
+  color: var(--text-muted);
+  opacity: 0.6;
+}
+.mit-stat-value {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
 
 /* ============================================================
    INFO PANEL
