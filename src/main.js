@@ -24,7 +24,7 @@ import { FloatingDebrisManager } from './water/FloatingDebrisManager.js';
 import { loadNSIData, findNearestBuilding } from './services/NSIService.js';
 import { loadCurvesData } from './data/DepthDamageCurves.js';
 import { loadMitigationData } from './data/MitigationService.js';
-import { MitigationRenderer } from './water/MitigationRenderer.js';
+
 import { MitigationPanel } from './ui/MitigationPanel.js';
 
 // ─── State ───────────────────────────────────────────────────
@@ -40,7 +40,7 @@ let debrisManager = null;
 let currentLocation = LOCATIONS[0]; // French Quarter
 let currentViewPreset = 'aerial';
 let previewTimeout = null; // auto-hide timer for region size preview
-let mitigationRenderer = null;
+
 let mitigationPanel = null;
 
 // ─── Boot ────────────────────────────────────────────────────
@@ -63,7 +63,7 @@ async function boot() {
     };
     fpControls = new FirstPersonControls(viewer);
     debrisManager = new FloatingDebrisManager(viewer);
-    mitigationRenderer = new MitigationRenderer(viewer);
+
 
     // Fire-and-forget: NSI building data (~5MB), depth-damage curves,
     // and mitigation options load in the background.
@@ -202,7 +202,6 @@ function refreshDamagePanelForSelection() {
     // This building is dry at the new level — the panel no longer applies.
     damagePanel.hide();
     if (mitigationPanel) mitigationPanel.hide();
-    if (mitigationRenderer) mitigationRenderer.clear();
     selectedBuilding = null;
     if (selectedBuildingMarker) {
       viewer.entities.remove(selectedBuildingMarker);
@@ -241,7 +240,7 @@ async function handleBuildingClick(lat, lng, clickedElevation, presetBuildingNam
     viewer.entities.remove(selectedBuildingMarker);
     selectedBuildingMarker = null;
   }
-  if (mitigationRenderer) mitigationRenderer.clear();
+
 
   // Place a 3D map pin at the clicked building with a spinning animation
   const pinPosition = Cesium.Cartesian3.fromDegrees(lng, lat, clickedElevation);
@@ -260,12 +259,12 @@ async function handleBuildingClick(lat, lng, clickedElevation, presetBuildingNam
     }, false),
     model: {
       uri: './assets/models/map_pin.glb',
-      scale: 0.6,
-      minimumPixelSize: 24,
-      maximumScale: 20.0,
-      color: Cesium.Color.fromCssColorString('#00e5ff'),
+      scale: 1.0,
+      minimumPixelSize: 40,
+      maximumScale: 30.0,
+      color: Cesium.Color.fromCssColorString('#ff3333'),
       colorBlendMode: Cesium.ColorBlendMode.REPLACE,
-      colorBlendAmount: 0.85,
+      colorBlendAmount: 0.9,
     }
   });
 
@@ -283,10 +282,11 @@ async function handleBuildingClick(lat, lng, clickedElevation, presetBuildingNam
   damagePanel.setLoadingAddress();
   damagePanel.setDamageInfo(lat, lng, waterDepth * 3.28084, flowState, nsiMatch);
 
-  // Show mitigation panel alongside damage panel
+  // Prepare mitigation data (panel shown via toggle in damage panel)
   if (mitigationPanel) {
     mitigationPanel.setBuilding(waterDepth * 3.28084, nsiMatch, lat, lng);
-    mitigationPanel.show();
+    // Don't auto-show — user toggles via "Show Mitigation Analysis" button
+    damagePanel._updateMitToggle();
   }
 
   let buildingName = presetBuildingName;
@@ -338,7 +338,6 @@ function initUI() {
         selectedBuilding = null;
         if (damagePanel) damagePanel.hide();
         if (mitigationPanel) mitigationPanel.hide();
-        if (mitigationRenderer) mitigationRenderer.clear();
         if (selectedBuildingMarker) {
           viewer.entities.remove(selectedBuildingMarker);
           selectedBuildingMarker = null;
@@ -462,7 +461,7 @@ function initUI() {
     onClear: () => {
       waterRenderer.clear();
       debrisManager.clear();
-      if (mitigationRenderer) mitigationRenderer.clear();
+
       selectedBuilding = null;
       debrisManager.updateWaterLevel(Number.NEGATIVE_INFINITY);
       infoPanel.setWaterLevel(0);
@@ -486,29 +485,10 @@ function initUI() {
         viewer.entities.remove(selectedBuildingMarker);
         selectedBuildingMarker = null;
       }
-      if (mitigationRenderer) mitigationRenderer.clear();
-      if (mitigationPanel) mitigationPanel.hide();
     },
   });
-  mitigationPanel = new MitigationPanel({
-    onMitigationSelect: (m) => {
-      if (!selectedBuilding || !mitigationRenderer) return;
-      const { lat, lng } = selectedBuilding;
-      const groundElev = waterRenderer.getGroundElevationAt(lat, lng);
-      if (groundElev === null) return;
-      const geoidOffset = waterRenderer.getGroundElevation() - waterRenderer.getGroundNavd88();
-      const groundEllipsoid = groundElev + geoidOffset;
-      const nsiMatch = findNearestBuilding(lat, lng);
-      const sqft = nsiMatch?.sqft || 1500;
-      mitigationRenderer.show(lat, lng, groundEllipsoid, m.mid, m.designFt, sqft);
-    },
-    onMitigationClear: () => {
-      if (mitigationRenderer) mitigationRenderer.clear();
-    },
-    onClose: () => {
-      if (mitigationRenderer) mitigationRenderer.clear();
-    }
-  });
+  mitigationPanel = new MitigationPanel({});
+  damagePanel.setMitigationPanel(mitigationPanel);
   infoPanel.setLocation(currentLocation.name);
 }
 

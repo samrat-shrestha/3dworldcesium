@@ -8,6 +8,7 @@ export class DamagePanel {
     this.viewer = viewer;
     this.panel = document.getElementById('damagePanel');
     this.options = options;
+    this._mitigationPanel = null;
     this._build();
   }
 
@@ -19,7 +20,6 @@ export class DamagePanel {
       </div>
 
       <div id="damagePromptMessage" style="display: none; padding: 20px 8px; text-align: center;">
-        <div style="font-size: 1.6rem; margin-bottom: 12px;">🏠</div>
         <div style="font-size: 0.9rem; color: var(--text-primary, #fff); font-weight: 500; margin-bottom: 8px;">Flood simulation complete</div>
         <div style="font-size: 0.8rem; color: var(--text-secondary, #aaa); line-height: 1.5;">Click on any building to view its damage estimation report.</div>
       </div>
@@ -66,12 +66,29 @@ export class DamagePanel {
         </div>
 
         <div class="info-section" id="damageAssumptions" style="margin-top: 8px; padding-top: 8px; border-top: 1px dashed rgba(255,255,255,0.1); font-size: 0.68rem; color: var(--text-secondary, #888); line-height: 1.5;"></div>
+
+        <button id="damageMitToggle" class="damage-mit-toggle">
+          <span id="damageMitToggleText">Show Mitigation Analysis</span>
+          <span class="damage-mit-toggle-arrow" id="damageMitToggleArrow">&#9654;</span>
+        </button>
       </div>
     `;
 
     document.getElementById('damageCloseBtn').addEventListener('click', () => {
       this.hide();
+      if (this._mitigationPanel) this._mitigationPanel.hide();
+      this._updateMitToggle();
       if (this.options.onClose) this.options.onClose();
+    });
+
+    document.getElementById('damageMitToggle').addEventListener('click', () => {
+      if (!this._mitigationPanel) return;
+      if (this._mitigationPanel.isVisible()) {
+        this._mitigationPanel.hide();
+      } else {
+        this._mitigationPanel.show();
+      }
+      this._updateMitToggle();
     });
   }
 
@@ -81,6 +98,19 @@ export class DamagePanel {
 
   hide() {
     this.panel.style.display = 'none';
+  }
+
+  setMitigationPanel(mp) {
+    this._mitigationPanel = mp;
+  }
+
+  _updateMitToggle() {
+    const text = document.getElementById('damageMitToggleText');
+    const arrow = document.getElementById('damageMitToggleArrow');
+    if (!text || !arrow) return;
+    const visible = this._mitigationPanel && this._mitigationPanel.isVisible();
+    text.textContent = visible ? 'Hide Mitigation Analysis' : 'Show Mitigation Analysis';
+    arrow.innerHTML = visible ? '&#9664;' : '&#9654;';
   }
 
   showPrompt() {

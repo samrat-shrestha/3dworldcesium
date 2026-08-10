@@ -4,14 +4,16 @@ import { getDamageEstimate } from '../data/DepthDamageCurves.js';
 const fmt = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
 
 /**
- * MitigationPanel — standalone left-side panel that shows mitigation options
- * and before/after cost-benefit analysis for a selected building.
+ * MitigationPanel — form-based mitigation estimator.
+ * User selects a mitigation type + design level, clicks "Estimate",
+ * and gets a detailed cost-benefit report.
  */
 export class MitigationPanel {
   constructor(options = {}) {
     this.panel = document.getElementById('mitigationPanel');
     this.options = options;
-    this._activeMid = null;
+    this._mitigations = [];  // current applicable mitigations
+    this._selectedMitigation = null;
     this._build();
   }
 
@@ -20,37 +22,76 @@ export class MitigationPanel {
       <div class="mitigation-header">
         <div>
           <div class="mitigation-header-title">Mitigation Analysis</div>
-          <div class="mitigation-header-sub">Select a protection measure</div>
+          <div class="mitigation-header-sub">Estimate flood protection measures</div>
         </div>
-        <button class="mitigation-close-btn" id="mitigationCloseBtn">&times;</button>
       </div>
 
       <div id="mitigationPrompt" class="mitigation-prompt">
-        <div class="mitigation-prompt-icon">📊</div>
-        <div class="mitigation-prompt-text">Click on a building with flood damage to see available mitigation options and cost-benefit analysis.</div>
+        <div class="mitigation-prompt-text">Click on a flooded building to analyze mitigation options.</div>
       </div>
 
       <div id="mitigationBody" style="display: none;">
-        <div id="mitigationBuildingInfo" class="mitigation-building-info"></div>
-        <div id="mitigationOptionsList" class="mitigation-options-list"></div>
-        <div id="mitigationImpact" class="mitigation-impact" style="display: none;"></div>
+        <!-- Selector Form -->
+        <div class="mit-form">
+          <div class="mit-form-group">
+            <label class="mit-form-label">Mitigation Type</label>
+            <select id="mitTypeSelect" class="mit-select">
+              <option value="">— Select type —</option>
+            </select>
+          </div>
+          <div class="mit-form-group">
+            <label class="mit-form-label">Design Level</label>
+            <select id="mitDesignSelect" class="mit-select" disabled>
+              <option value="">— Select design —</option>
+            </select>
+          </div>
+          <button id="mitEstimateBtn" class="mit-estimate-btn" disabled>
+            Estimate Mitigation
+          </button>
+        </div>
+
+        <!-- Report (hidden until estimated) -->
+        <div id="mitigationReport" style="display: none;"></div>
       </div>
     `;
 
-    document.getElementById('mitigationCloseBtn').addEventListener('click', () => {
-      this.hide();
-      if (this.options.onClose) this.options.onClose();
+    // Type selector change
+    document.getElementById('mitTypeSelect').addEventListener('change', () => {
+      this._onTypeChange();
+    });
+
+    // Design selector change
+    document.getElementById('mitDesignSelect').addEventListener('change', () => {
+      const btn = document.getElementById('mitEstimateBtn');
+      btn.disabled = !document.getElementById('mitDesignSelect').value;
+    });
+
+    // Estimate button
+    document.getElementById('mitEstimateBtn').addEventListener('click', () => {
+      this._generateReport();
     });
   }
 
   show() {
-    this.panel.style.display = 'block';
+    this._visible = true;
+    this.panel.style.display = 'block'; // Ensure it's block for the transition
+    // small delay to allow display:block to apply before adding class for transition
+    requestAnimationFrame(() => {
+      this.panel.classList.add('mit-panel-visible');
+    });
   }
-
+  
   hide() {
-    this.panel.style.display = 'none';
-    this._activeMid = null;
+    this._visible = false;
+    this.panel.classList.remove('mit-panel-visible');
+    // Wait for transition to finish before display none
+    setTimeout(() => {
+      if (!this.isVisible()) this.panel.style.display = 'none';
+    }, 300);
+    this._selectedMitigation = null;
   }
+  
+  isVisible() { return this._visible; }
 
   showPrompt() {
     document.getElementById('mitigationPrompt').style.display = 'block';
@@ -59,11 +100,7 @@ export class MitigationPanel {
   }
 
   /**
-   * Populate the panel with mitigation options for a building.
-   * @param {number} depthFt
-   * @param {Object} nsiMatch
-   * @param {number} lat
-   * @param {number} lng
+   * Populate the panel for a clicked building.
    */
   setBuilding(depthFt, nsiMatch, lat, lng) {
     if (!nsiMatch) {
@@ -73,188 +110,182 @@ export class MitigationPanel {
 
     document.getElementById('mitigationPrompt').style.display = 'none';
     document.getElementById('mitigationBody').style.display = 'block';
-    document.getElementById('mitigationImpact').style.display = 'none';
-    this._activeMid = null;
+    document.getElementById('mitigationReport').style.display = 'none';
+    this._selectedMitigation = null;
 
-    // Building info header
-    const infoEl = document.getElementById('mitigationBuildingInfo');
-    const totalDamage = this._getBaselineDamage(depthFt, nsiMatch);
-    infoEl.innerHTML = `
-      <div class="mit-building-row">
-        <span class="mit-building-label">Building</span>
-        <span class="mit-building-value">${nsiMatch.occupancy} · ${(nsiMatch.sqft || 0).toLocaleString()} sqft</span>
-      </div>
-      <div class="mit-building-row">
-        <span class="mit-building-label">Current Damage</span>
-        <span class="mit-building-value mit-damage-value">${fmt.format(totalDamage)}</span>
-      </div>
-    `;
+    // Get all applicable mitigations
+    this._mitigations = getApplicableMitigations(depthFt, nsiMatch, getDamageEstimate);
+    this._depthFt = depthFt;
+    this._nsiMatch = nsiMatch;
 
-    // Options list
-    const listEl = document.getElementById('mitigationOptionsList');
-    listEl.innerHTML = '';
+    // Populate type dropdown with unique mitigation types
+    const typeSelect = document.getElementById('mitTypeSelect');
+    const designSelect = document.getElementById('mitDesignSelect');
+    const estimateBtn = document.getElementById('mitEstimateBtn');
 
-    const mitigations = getApplicableMitigations(depthFt, nsiMatch, getDamageEstimate);
-    if (mitigations.length === 0) {
-      listEl.innerHTML = '<div class="mitigation-empty">No applicable mitigations for current conditions.</div>';
+    typeSelect.innerHTML = '<option value="">— Select type —</option>';
+    designSelect.innerHTML = '<option value="">— Select design —</option>';
+    designSelect.disabled = true;
+    estimateBtn.disabled = true;
+
+    // Group by mid to get unique types
+    const types = new Map();
+    for (const m of this._mitigations) {
+      if (!types.has(m.mid)) {
+        types.set(m.mid, { mid: m.mid, label: m.measure });
+      }
+    }
+
+    for (const t of types.values()) {
+      const opt = document.createElement('option');
+      opt.value = t.mid;
+      opt.textContent = t.label;
+      typeSelect.appendChild(opt);
+    }
+
+    if (types.size === 0) {
+      typeSelect.innerHTML = '<option value="">No mitigations available</option>';
+    }
+  }
+
+  _onTypeChange() {
+    const typeSelect = document.getElementById('mitTypeSelect');
+    const designSelect = document.getElementById('mitDesignSelect');
+    const estimateBtn = document.getElementById('mitEstimateBtn');
+    const report = document.getElementById('mitigationReport');
+
+    const selectedMid = parseInt(typeSelect.value);
+    report.style.display = 'none';
+    this._selectedMitigation = null;
+
+    if (!selectedMid) {
+      designSelect.innerHTML = '<option value="">— Select design —</option>';
+      designSelect.disabled = true;
+      estimateBtn.disabled = true;
       return;
     }
 
-    // Show top 2 per type, max 6
-    const shown = new Map();
-    const filtered = mitigations.filter(m => {
-      const count = shown.get(m.mid) || 0;
-      if (count >= 2) return false;
-      shown.set(m.mid, count + 1);
-      return true;
-    }).slice(0, 6);
+    // Get available design levels for this type
+    const options = this._mitigations.filter(m => m.mid === selectedMid);
+    designSelect.innerHTML = '<option value="">— Select level —</option>';
 
-    for (const m of filtered) {
-      const card = this._createOptionCard(m, depthFt, nsiMatch);
-      listEl.appendChild(card);
+    for (const m of options) {
+      const opt = document.createElement('option');
+      opt.value = m.designFt;
+      opt.textContent = `${m.designFt} ft`;
+      designSelect.appendChild(opt);
     }
+
+    designSelect.disabled = false;
+    estimateBtn.disabled = true;
   }
 
-  _getBaselineDamage(depthFt, nsiMatch) {
-    const estimate = getDamageEstimate(nsiMatch.occupancy, depthFt, {
-      foundationHeightFt: nsiMatch.foundationHeightFt ?? 0,
-      replacementValueUSD: nsiMatch.structuralValueUSD ?? 200000,
-      contentValueUSD: nsiMatch.contentValueUSD ?? 100000,
-    });
-    return estimate.structuralUSD + estimate.contentUSD;
-  }
+  _generateReport() {
+    const mid = parseInt(document.getElementById('mitTypeSelect').value);
+    const designFt = parseFloat(document.getElementById('mitDesignSelect').value);
 
-  _createOptionCard(m, depthFt, nsiMatch) {
-    const card = document.createElement('div');
-    card.className = 'mit-option-card';
-    card.dataset.mid = m.mid;
-    card.dataset.designFt = m.designFt;
+    if (!mid || !designFt) return;
 
-    // Effectiveness bar (what % of damage is avoided)
+    const m = this._mitigations.find(x => x.mid === mid && x.designFt === designFt);
+    if (!m) return;
+
+    this._selectedMitigation = m;
     const effectiveness = m.baselineLoss > 0 ? (m.avoidedLoss / m.baselineLoss * 100) : 0;
     const bcrClass = m.bcr >= 1 ? 'mit-bcr-good' : m.bcr >= 0.5 ? 'mit-bcr-ok' : 'mit-bcr-poor';
 
-    // Color coding by mitigation type
-    const typeColors = {
-      1: { bg: '#d4a574', accent: '#c4884a' },   // Elevate - warm brown
-      11: { bg: '#c4a55a', accent: '#b8943f' },   // Sandbags - sandy
-      12: { bg: '#8899aa', accent: '#6b7d8f' },   // Floodwall - steel
-    };
-    const colors = typeColors[m.mid] || { bg: '#5b9bd5', accent: '#4a88c2' };
-
-    card.innerHTML = `
-      <div class="mit-card-header">
-        <div class="mit-card-type" style="background: ${colors.bg}22; color: ${colors.bg}; border-color: ${colors.bg}44;">
-          ${m.icon} ${m.label}
+    const report = document.getElementById('mitigationReport');
+    report.style.display = 'block';
+    report.innerHTML = `
+      <div class="mit-report">
+        <div class="mit-report-header">
+          <span class="mit-report-title">${m.label}</span>
         </div>
-        <div class="mit-card-bcr ${bcrClass}">
-          ${m.bcr >= 1 ? '✓' : ''} BCR ${m.bcr.toFixed(1)}x
-        </div>
-      </div>
 
-      <div class="mit-card-effectiveness">
-        <div class="mit-eff-bar-track">
-          <div class="mit-eff-bar-fill" style="width: ${Math.min(effectiveness, 100)}%; background: ${colors.bg};"></div>
-        </div>
-        <span class="mit-eff-label">${effectiveness.toFixed(0)}% damage reduction</span>
-      </div>
+        <div class="mit-report-desc">${m.description}</div>
 
-      <div class="mit-card-costs">
-        <div class="mit-cost-item">
-          <span class="mit-cost-label">Cost</span>
-          <span class="mit-cost-value">${fmt.format(m.totalCost)}</span>
-        </div>
-        <div class="mit-cost-item">
-          <span class="mit-cost-label">Saves</span>
-          <span class="mit-cost-value mit-saves">${fmt.format(m.avoidedLoss)}</span>
-        </div>
-      </div>
-    `;
-
-    card.addEventListener('click', () => {
-      // Deselect all
-      const all = document.querySelectorAll('.mit-option-card');
-      all.forEach(c => c.classList.remove('mit-selected'));
-
-      // Select this
-      card.classList.add('mit-selected');
-      this._activeMid = m.mid;
-
-      // Show impact detail
-      this._showImpact(m, colors);
-
-      // Fire callback for 3D visual
-      if (this.options.onMitigationSelect) {
-        this.options.onMitigationSelect(m);
-      }
-    });
-
-    return card;
-  }
-
-  _showImpact(m, colors) {
-    const el = document.getElementById('mitigationImpact');
-    el.style.display = 'block';
-
-    const effectiveness = m.baselineLoss > 0 ? (m.avoidedLoss / m.baselineLoss * 100) : 0;
-
-    el.innerHTML = `
-      <div class="mit-impact-header">
-        <span class="mit-impact-title">Impact Analysis</span>
-        <button class="mit-remove-btn" id="mitigationRemoveBtn">✕ Remove</button>
-      </div>
-
-      <div class="mit-impact-comparison">
-        <div class="mit-compare-col mit-compare-before">
-          <div class="mit-compare-label">Without</div>
-          <div class="mit-compare-amount">${fmt.format(m.baselineLoss)}</div>
-          <div class="mit-compare-bar">
-            <div class="mit-compare-bar-fill" style="width: 100%; background: #ff6b6b;"></div>
+        <!-- Before / After Comparison -->
+        <div class="mit-comparison">
+          <div class="mit-compare-side mit-compare-before">
+            <div class="mit-compare-heading">Without Mitigation</div>
+            <div class="mit-compare-amount">${fmt.format(m.baselineLoss)}</div>
+            <div class="mit-compare-bar-track">
+              <div class="mit-compare-bar-fill" style="width: 100%; background: #ff6b6b;"></div>
+            </div>
+          </div>
+          <div class="mit-compare-divider">→</div>
+          <div class="mit-compare-side mit-compare-after">
+            <div class="mit-compare-heading">With ${m.label}</div>
+            <div class="mit-compare-amount" style="color: var(--text-primary, #ddd);">${fmt.format(m.mitigatedLoss)}</div>
+            <div class="mit-compare-bar-track">
+              <div class="mit-compare-bar-fill" style="width: ${m.baselineLoss > 0 ? (m.mitigatedLoss / m.baselineLoss * 100) : 0}%; background: #63b3ed;"></div>
+            </div>
           </div>
         </div>
-        <div class="mit-compare-arrow">→</div>
-        <div class="mit-compare-col mit-compare-after">
-          <div class="mit-compare-label">With ${m.label}</div>
-          <div class="mit-compare-amount">${fmt.format(m.mitigatedLoss)}</div>
-          <div class="mit-compare-bar">
-            <div class="mit-compare-bar-fill" style="width: ${m.baselineLoss > 0 ? (m.mitigatedLoss / m.baselineLoss * 100) : 0}%; background: #5cb85c;"></div>
-          </div>
-        </div>
-      </div>
 
-      <div class="mit-impact-stats">
-        <div class="mit-stat">
-          <span class="mit-stat-label">Damage Avoided</span>
-          <span class="mit-stat-value" style="color: #5cb85c;">${fmt.format(m.avoidedLoss)} (${effectiveness.toFixed(0)}%)</span>
+        <!-- Stats -->
+        <div class="mit-report-stats">
+          <div class="mit-stat-row">
+            <span class="mit-stat-label">Mitigation Cost</span>
+            <span class="mit-stat-value">${fmt.format(m.totalCost)}</span>
+          </div>
+          <div class="mit-stat-row">
+            <span class="mit-stat-label">Damage Avoided</span>
+            <span class="mit-stat-value" style="color: #5cb85c;">${fmt.format(m.avoidedLoss)}</span>
+          </div>
+          <div class="mit-stat-row">
+            <span class="mit-stat-label">Damage Reduction</span>
+            <span class="mit-stat-value" style="color: #5cb85c;">${effectiveness.toFixed(0)}%</span>
+          </div>
+          <div class="mit-stat-row mit-stat-highlight">
+            <span class="mit-stat-label">Benefit-Cost Ratio</span>
+            <span class="mit-stat-value ${bcrClass}">${m.bcr.toFixed(2)}x</span>
+          </div>
+          ${m.lifeSpan ? `
+          <div class="mit-stat-row">
+            <span class="mit-stat-label">Life Span</span>
+            <span class="mit-stat-value">${m.lifeSpan} years</span>
+          </div>` : ''}
         </div>
-        <div class="mit-stat">
-          <span class="mit-stat-label">Mitigation Cost</span>
-          <span class="mit-stat-value">${fmt.format(m.totalCost)}</span>
-        </div>
-        <div class="mit-stat">
-          <span class="mit-stat-label">Benefit-Cost Ratio</span>
-          <span class="mit-stat-value ${m.bcr >= 1 ? 'mit-bcr-good' : m.bcr >= 0.5 ? 'mit-bcr-ok' : 'mit-bcr-poor'}">${m.bcr.toFixed(2)}x</span>
-        </div>
-        ${m.lifeSpan ? `<div class="mit-stat">
-          <span class="mit-stat-label">Life Span</span>
-          <span class="mit-stat-value">${m.lifeSpan} years</span>
+
+        ${m.restrictions ? `
+        <div class="mit-restrictions">
+          <div class="mit-restrictions-label">⚠ Restrictions</div>
+          <div class="mit-restrictions-text">${m.restrictions}</div>
         </div>` : ''}
+
+        <!-- Breakdown -->
+        <div class="mit-breakdown">
+          <div class="mit-breakdown-title">Loss Breakdown</div>
+          <div class="mit-breakdown-grid">
+            <div class="mit-breakdown-cell"></div>
+            <div class="mit-breakdown-cell mit-breakdown-head">Before</div>
+            <div class="mit-breakdown-cell mit-breakdown-head">After</div>
+
+            <div class="mit-breakdown-cell mit-breakdown-label">Structural</div>
+            <div class="mit-breakdown-cell">${fmt.format(m.structuralLossBefore)}</div>
+            <div class="mit-breakdown-cell">${fmt.format(m.structuralLossAfter)}</div>
+
+            <div class="mit-breakdown-cell mit-breakdown-label">Content</div>
+            <div class="mit-breakdown-cell">${fmt.format(m.contentLossBefore)}</div>
+            <div class="mit-breakdown-cell">${fmt.format(m.contentLossAfter)}</div>
+
+            <div class="mit-breakdown-cell mit-breakdown-label" style="font-weight: 700;">Total</div>
+            <div class="mit-breakdown-cell" style="font-weight: 700;">${fmt.format(m.baselineLoss)}</div>
+            <div class="mit-breakdown-cell" style="font-weight: 700;">${fmt.format(m.mitigatedLoss)}</div>
+          </div>
+        </div>
       </div>
     `;
 
-    document.getElementById('mitigationRemoveBtn').addEventListener('click', (e) => {
-      e.stopPropagation();
-      el.style.display = 'none';
-      this._activeMid = null;
-      document.querySelectorAll('.mit-option-card').forEach(c => c.classList.remove('mit-selected'));
-      if (this.options.onMitigationClear) this.options.onMitigationClear();
-    });
+    // Fire callback (no 3D rendering anymore, just report)
+    if (this.options.onMitigationSelect) {
+      this.options.onMitigationSelect(m);
+    }
   }
 
   clear() {
-    this._activeMid = null;
-    const impact = document.getElementById('mitigationImpact');
-    if (impact) impact.style.display = 'none';
-    document.querySelectorAll('.mit-option-card').forEach(c => c.classList.remove('mit-selected'));
+    this._selectedMitigation = null;
+    const report = document.getElementById('mitigationReport');
+    if (report) report.style.display = 'none';
   }
 }
