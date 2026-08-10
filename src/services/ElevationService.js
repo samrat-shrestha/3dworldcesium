@@ -21,6 +21,38 @@ if (!GOOGLE_ELEVATION_API_KEY) {
   console.warn('[ElevationService] ⚠️ VITE_GOOGLE_ELEVATION_API_KEY is not set! DEM grid and elevation lookups will fail. Create a .env file with this key.');
 }
 
+/**
+ * Google Maps Polyline Encoding Algorithm
+ * Compresses an array of lat/lng objects into an ASCII string.
+ */
+function encodePolyline(coordinates) {
+  let result = '';
+  let prevLat = 0;
+  let prevLng = 0;
+
+  for (const point of coordinates) {
+    const lat = Math.round(point.lat * 1e5);
+    const lng = Math.round(point.lng * 1e5);
+    const dLat = lat - prevLat;
+    const dLng = lng - prevLng;
+    prevLat = lat;
+    prevLng = lng;
+    result += encodeValue(dLat) + encodeValue(dLng);
+  }
+  return result;
+}
+
+function encodeValue(value) {
+  value = value < 0 ? ~(value << 1) : (value << 1);
+  let result = '';
+  while (value >= 0x20) {
+    result += String.fromCharCode((0x20 | (value & 0x1f)) + 63);
+    value >>= 5;
+  }
+  result += String.fromCharCode(value + 63);
+  return result;
+}
+
 export class ElevationService {
   constructor() {
     this.geoidOffset = null;
@@ -176,9 +208,9 @@ export class ElevationService {
 
       console.log(`[ElevationService] Fetching ${gridSize}×${gridSize} DEM grid (${locations.length} points)...`);
 
-      // Batch into chunks of 40 to stay well under strict 2KB (2048) proxy limits
-      // Using concurrent Promise.all so performance remains lightning fast
-      const batchSize = 40;
+      // Batch into chunks of 512 (Google API maximum limit per request)
+      // Polyline encoding keeps the URL well under the 2KB proxy limits
+      const batchSize = 512;
       const batches = [];
       for (let i = 0; i < locations.length; i += batchSize) {
         batches.push(locations.slice(i, i + batchSize));
@@ -188,8 +220,9 @@ export class ElevationService {
       const baseUrl = this._getGoogleBaseUrl();
 
       const fetchPromises = batches.map(async (batch) => {
-        const locStr = batch.map(p => `${p.lat.toFixed(6)},${p.lng.toFixed(6)}`).join('|');
-        const url = `${baseUrl}?locations=${encodeURIComponent(locStr)}&key=${GOOGLE_ELEVATION_API_KEY}`;
+        // Compress the batch using polyline encoding (prepended with enc:)
+        const encoded = encodePolyline(batch);
+        const url = `${baseUrl}?locations=enc:${encodeURIComponent(encoded)}&key=${GOOGLE_ELEVATION_API_KEY}`;
 
         const response = await fetch(url);
         if (!response.ok) {
