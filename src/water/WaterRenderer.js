@@ -134,7 +134,7 @@ export class WaterRenderer {
 
     // Fetch DEM grid for flood fill
     console.log('[WaterRenderer] Fetching DEM grid for flood fill...');
-    this.demData = await this.elevationService.getElevationGrid(lat, lng, radius, 60);
+    this.demData = await this.elevationService.getElevationGrid(lat, lng, radius, 100);
     this.demRadius = radius;
     if (this.demData) {
       // Align the DEM grid with our exact pinpoint ground elevation
@@ -170,16 +170,12 @@ export class WaterRenderer {
    * @param {number} waterLevelAboveGround - Meters above ground
    * @param {number} [radius=0.00362]
    */
-  updateWater(waterLevelAboveGround, radius = 0.00362) {
+  async updateWater(waterLevelAboveGround, radius = 0.00362) {
     if (Math.abs(radius - this.currentRadius) > 0.00001) {
       this._updateSandboxWall(this.originLat, this.originLng, radius);
     }
     this.currentLevel = waterLevelAboveGround;
     this.currentRadius = radius;
-
-    // If a flow animation is running, don't interrupt it —
-    // just track the level so we can render the final state when it's done
-    if (this.animationId) return;
 
     this._removeWater();
 
@@ -195,25 +191,23 @@ export class WaterRenderer {
 
     const waterSurfaceEllipsoid = this.groundEllipsoid + waterLevelAboveGround;
 
-    // If radius changed, invalidate DEM cache (will re-fetch on next click)
+    // If radius changed, fetch new DEM cache dynamically
     if (this.demData && Math.abs(radius - this.demRadius) > 0.0001) {
-      this.demData = null;
-      this.demRadius = null;
+      console.log(`[WaterRenderer] Radius changed to ${radius}, re-fetching DEM...`);
+      try {
+        this.demData = await this.elevationService.getElevationGrid(this.originLat, this.originLng, radius, 100);
+        this.demRadius = radius;
+      } catch (e) {
+        console.error(e);
+        this.demData = null;
+      }
     }
 
     // Try DEM-aware flood fill with cached grid
     if (this.demData) {
-      const waterLevelMSL = this.groundNavd88 + waterLevelAboveGround;
-      const seedRow = Math.floor(this.demData.meta.rows / 2);
-      const seedCol = Math.floor(this.demData.meta.cols / 2);
-
-      const floodedCells = floodFill(this.demData.grid, seedRow, seedCol, waterLevelMSL);
-
-      if (floodedCells.size > 0) {
-        const depthGrid = this._buildDepthGrid(floodedCells, waterLevelMSL);
-        this.waterPrimitive = this._createWaterMeshPrimitive(depthGrid, false, false);
-        return;
-      }
+      // Run the SWE physics simulation with fastForward=true so it completes in ~2.5 seconds
+      this.animateFloodFill(waterLevelAboveGround, radius, null, true);
+      return;
     }
 
     // Fallback: circular water plane
@@ -233,7 +227,7 @@ export class WaterRenderer {
    * @param {number} radius - Coverage radius in degrees
    * @param {Function} [onUpdate] - Callback with cell count after each step
    */
-  animateFloodFill(waterLevelAboveGround, radius, onUpdate = null) {
+  animateFloodFill(waterLevelAboveGround, radius, onUpdate = null, fastForward = false) {
     // Cancel any existing animation
     if (this.animationId) {
       cancelAnimationFrame(this.animationId);
@@ -285,8 +279,10 @@ export class WaterRenderer {
     const remainingVolume = Math.max(0, targetVolume - initialVolume);
 
     // Simulation timing
-    const animDuration = 24000;  // 24 s wall-clock for a slower, more visible flow
+    const animDuration = fastForward ? 2500 : 24000;  // 2.5s for slider updates, 24s for initial flow
     const totalSimTime = 200;   // 200 s of physics
+    const maxSubsteps = fastForward ? 200 : 40;       // Allow CPU to work harder during fast forward
+
     const injectionEnd = totalSimTime * 0.85;  // inject for 85% of sim time
     const injectionRate = remainingVolume / injectionEnd; // m³/s of sim time
 
@@ -321,7 +317,7 @@ export class WaterRenderer {
         }
 
         // Advance physics (CFL-safe sub-steps)
-        solver.advance(simToAdvance, 40);
+        solver.advance(simToAdvance, maxSubsteps);
 
         // The dam-break seed + forced injection above create an artificial
         // startup transient (peak speeds far above sustained flow). Once

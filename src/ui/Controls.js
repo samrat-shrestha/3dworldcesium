@@ -72,7 +72,8 @@ export class Controls {
         <div class="control-section">
           <div class="section-label">Elevation Provider</div>
           <select id="providerSelect" class="styled-select">
-            <option value="google" selected>Google Elevation</option>
+            <option value="aws" selected>AWS Terrain RGB</option>
+            <option value="google">Google Elevation</option>
             <option value="usgs">USGS 3DEP</option>
           </select>
         </div>
@@ -208,10 +209,14 @@ export class Controls {
     const radiusDisplay = document.getElementById('radiusDisplay');
     radiusSlider.addEventListener('input', () => {
       const sizeMiles = parseFloat(radiusSlider.value);
+      radiusDisplay.textContent = `${sizeMiles.toFixed(1)} mi`;
+    });
+
+    radiusSlider.addEventListener('change', () => {
+      const sizeMiles = parseFloat(radiusSlider.value);
       const radiusMiles = sizeMiles / 2;
       const radiusDegrees = (radiusMiles * 1.60934) / 111;
       this.currentRadius = radiusDegrees;
-      radiusDisplay.textContent = `${sizeMiles.toFixed(1)} mi`;
       this.options.onRadiusChange(radiusDegrees);
     });
 
@@ -303,7 +308,7 @@ export class Controls {
       display.style.display = 'block';
       if (msg) msg.style.display = 'none';
       if (infoIcon) infoIcon.style.display = 'inline-flex';
-      
+
       if (waterContainer) waterContainer.classList.add('visible');
       coordsEl.textContent = `${origin.lat.toFixed(5)}°, ${origin.lng.toFixed(5)}°`;
       const elevFt = origin.elevation / 0.3048;
@@ -333,7 +338,7 @@ export class Controls {
     const display = document.getElementById('originDisplay');
     const msg = document.getElementById('clickInstructionMsg');
     const infoIcon = document.getElementById('originInfoIcon');
-    
+
     if (loading) {
       if (display) display.style.display = 'none';
       if (infoIcon) infoIcon.style.display = 'none';

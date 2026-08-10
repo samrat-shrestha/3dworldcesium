@@ -1,3 +1,5 @@
+import { TerrainRGBProvider } from './TerrainRGBProvider.js';
+
 /**
  * ElevationService — Bare-earth elevation from the USGS 3DEP Elevation Point Query Service.
  *
@@ -56,7 +58,8 @@ function encodeValue(value) {
 export class ElevationService {
   constructor() {
     this.geoidOffset = null;
-    this.provider = 'google'; // 'google' or 'usgs'
+    this.provider = 'aws'; // 'google', 'usgs', or 'aws'
+    this.awsProvider = new TerrainRGBProvider();
   }
 
   /**
@@ -151,7 +154,9 @@ export class ElevationService {
   }
 
   async getElevation(lat, lng) {
-    if (this.provider === 'google') {
+    if (this.provider === 'aws') {
+      return await this.awsProvider.getElevation(lat, lng);
+    } else if (this.provider === 'google') {
       return await this._getGoogleElevation(lat, lng);
     } else {
       return await this._getUSGSElevation(lat, lng);
@@ -189,6 +194,10 @@ export class ElevationService {
    * @returns {Promise<{grid: number[][], meta: Object}|null>}
    */
   async getElevationGrid(lat, lng, radiusDeg, gridSize = 20) {
+    if (this.provider === 'aws') {
+      return await this.awsProvider.getElevationGrid(lat, lng, radiusDeg, gridSize);
+    }
+
     try {
       const cellSizeLat = (2 * radiusDeg) / gridSize;
       // Adjust longitude cell size for latitude — 1° lng is shorter at higher latitudes
