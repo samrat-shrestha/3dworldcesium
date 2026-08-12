@@ -59,6 +59,14 @@ export class WaterRenderer {
     // solver's peak fields are final. Set by consumers that need real
     // velocity (not just depth) to classify hazard.
     this.onFlowSettled = null;
+
+    // Optional callback, fired when a flood animation starts.
+    // Receives { fastForward: boolean }
+    this.onFlowStart = null;
+
+    // Optional callback, fired during each render frame of the flood animation.
+    // Receives progress (0–1).
+    this.onFlowProgress = null;
   }
 
   /**
@@ -279,9 +287,9 @@ export class WaterRenderer {
     const remainingVolume = Math.max(0, targetVolume - initialVolume);
 
     // Simulation timing
-    const animDuration = fastForward ? 2500 : 24000;  // 2.5s for slider updates, 24s for initial flow
-    const totalSimTime = 200;   // 200 s of physics
-    const maxSubsteps = fastForward ? 200 : 40;       // Allow CPU to work harder during fast forward
+    const animDuration = 2500;    // 2.5s for all animations
+    const totalSimTime = 200;     // 200 s of physics
+    const maxSubsteps = 200;      // Allow CPU to work hard for fast completion
 
     const injectionEnd = totalSimTime * 0.85;  // inject for 85% of sim time
     const injectionRate = remainingVolume / injectionEnd; // m³/s of sim time
@@ -360,6 +368,7 @@ export class WaterRenderer {
 
         lastRenderTime = timestamp;
         if (onUpdate) onUpdate(floodedCells.size);
+        if (this.onFlowProgress) this.onFlowProgress(linearProgress);
       }
 
       if (linearProgress < 1.0) {
@@ -394,6 +403,7 @@ export class WaterRenderer {
       }
     };
 
+    if (this.onFlowStart) this.onFlowStart({ fastForward });
     this.animationId = requestAnimationFrame(animate);
   }
 
@@ -468,6 +478,8 @@ export class WaterRenderer {
     }
 
     const vertexPositions = new Float64Array(rows * cols * 3);
+    // Track which cells are wet so we can skip wet/dry boundary triangles
+    const isWet = new Uint8Array(rows * cols);
     let posIdx = 0;
     let hasWet = false;
 
@@ -475,9 +487,14 @@ export class WaterRenderer {
       for (let c = 0; c < cols; c++) {
         const depth = depthGrid[r][c];
         const bed = this.demData.grid[r][c] + geoidOffset;
-        // Dry cells pushed 2m underground so terrain depth-test hides them
-        const height = depth > 0.005 ? bed + depth : bed - 2.0;
-        if (depth > 0.005) hasWet = true;
+        const wet = depth > 0.005;
+        // The SWE solver provides local depth.
+        // We use bed + depth to accurately drape the water surface over the terrain.
+        const height = wet ? bed + depth : bed - 2.0;
+        if (wet) {
+          hasWet = true;
+          isWet[r * cols + c] = 1;
+        }
 
         const bx = this._baseMeshPositions[posIdx];
         const by = this._baseMeshPositions[posIdx + 1];
@@ -494,6 +511,36 @@ export class WaterRenderer {
 
     if (!hasWet) return null;
 
+    // Rebuild indices: only include triangles where ALL 3 vertices are wet.
+    // This prevents sloping surfaces at wet/dry boundaries that cut through buildings.
+    const maxTriangles = (rows - 1) * (cols - 1) * 6;
+    const indices = new Uint16Array(maxTriangles);
+    let idxCount = 0;
+
+    for (let r = 0; r < rows - 1; r++) {
+      for (let c = 0; c < cols - 1; c++) {
+        const i0 = r * cols + c;
+        const i1 = i0 + 1;
+        const i2 = i0 + cols;
+        const i3 = i0 + cols + 1;
+
+        // Triangle 1: i0, i1, i2
+        if (isWet[i0] && isWet[i1] && isWet[i2]) {
+          indices[idxCount++] = i0;
+          indices[idxCount++] = i1;
+          indices[idxCount++] = i2;
+        }
+        // Triangle 2: i1, i3, i2
+        if (isWet[i1] && isWet[i3] && isWet[i2]) {
+          indices[idxCount++] = i1;
+          indices[idxCount++] = i3;
+          indices[idxCount++] = i2;
+        }
+      }
+    }
+
+    if (idxCount === 0) return null;
+
     const geometry = new Cesium.Geometry({
       attributes: {
         position: new Cesium.GeometryAttribute({
@@ -507,7 +554,7 @@ export class WaterRenderer {
           values: this._meshSt
         })
       },
-      indices: this._meshIndices,
+      indices: indices.subarray(0, idxCount),
       primitiveType: Cesium.PrimitiveType.TRIANGLES,
       boundingSphere: Cesium.BoundingSphere.fromVertices(vertexPositions)
     });
@@ -1007,6 +1054,29 @@ export class WaterRenderer {
       return { r, c };
     }
     return null;
+  }
+
+  /**
+   * Check whether a lat/lng falls within the DEM grid bounding box.
+   * @param {number} lat
+   * @param {number} lng
+   * @returns {boolean}
+   */
+  isInsideGrid(lat, lng) {
+    return this._latLngToCell(lat, lng) !== null;
+  }
+
+  /**
+   * Check whether a cell at lat/lng actually has water in the solver.
+   * @param {number} lat
+   * @param {number} lng
+   * @returns {boolean}
+   */
+  isCellWet(lat, lng) {
+    if (!this.solver) return false;
+    const cell = this._latLngToCell(lat, lng);
+    if (!cell) return false;
+    return this.solver.h[cell.r][cell.c] > 0.005;
   }
 
   getGroundElevationAt(lat, lng) {

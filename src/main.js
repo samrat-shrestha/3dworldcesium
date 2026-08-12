@@ -59,7 +59,26 @@ async function boot() {
     waterRenderer = new WaterRenderer(viewer, elevationService);
     // Show the damage panel prompt once the SWE flow animation finishes
     waterRenderer.onFlowSettled = () => {
+      if (controls) {
+        controls.hideSimulationProgress();
+        controls.setWaterSliderEnabled(true);
+      }
       if (damagePanel && !selectedBuilding) damagePanel.showPrompt();
+    };
+
+    // Show progress bar when flood animation starts
+    waterRenderer.onFlowStart = ({ fastForward }) => {
+      if (controls) {
+        controls.showSimulationProgress(
+          fastForward ? 'Updating flood...' : 'Simulating flood...'
+        );
+        controls.setWaterSliderEnabled(false);
+      }
+    };
+
+    // Update progress bar during flood animation
+    waterRenderer.onFlowProgress = (progress) => {
+      if (controls) controls.updateSimulationProgress(progress);
     };
     fpControls = new FirstPersonControls(viewer);
     debrisManager = new FloatingDebrisManager(viewer);
@@ -115,18 +134,9 @@ function initClickHandler() {
       console.log(`[HydroViz] Clicked: ${lat.toFixed(5)}°, ${lng.toFixed(5)}° — clicked surface: ${clickedElevation.toFixed(1)}m`);
 
       let isBuildingClick = false;
-      if (waterRenderer.hasOrigin()) {
-        const origin = waterRenderer.getOrigin();
-        const originCarto = Cesium.Cartographic.fromDegrees(origin.lng, origin.lat);
-        const clickCarto = Cesium.Cartographic.fromDegrees(lng, lat);
-        const geodesic = new Cesium.EllipsoidGeodesic(originCarto, clickCarto);
-        const distanceM = geodesic.surfaceDistance;
-
-        // currentRadius is in degrees. ~111,000 meters per degree
-        const radiusM = controls.currentRadius * 111000;
-
-        // Any click inside the flood radius while water is active = building inspect
-        if (distanceM <= radiusM && controls.currentLevel > 0) {
+      if (waterRenderer.hasOrigin() && controls.currentLevel > 0) {
+        // Any click inside the DEM grid while water is active = building inspect
+        if (waterRenderer.isInsideGrid(lat, lng)) {
           isBuildingClick = true;
           handleBuildingClick(lat, lng, clickedElevation);
         }
@@ -195,10 +205,7 @@ function refreshDamagePanelForSelection() {
   if (groundElev === null || waterSurface === null) return;
 
   const staticDepth = waterSurface - groundElev;
-  const flowState = waterRenderer.getFlowStateAt(lat, lng);
-  const waterDepth = (flowState && !flowState.stale) ? flowState.depth : staticDepth;
-
-  if (waterDepth <= 0) {
+  if (!waterRenderer.isCellWet(lat, lng) || staticDepth <= 0) {
     // This building is dry at the new level — the panel no longer applies.
     damagePanel.hide();
     if (mitigationPanel) mitigationPanel.hide();
@@ -210,6 +217,9 @@ function refreshDamagePanelForSelection() {
     return;
   }
 
+  const flowState = waterRenderer.getFlowStateAt(lat, lng);
+  const waterDepth = staticDepth;
+
   const nsiMatch = findNearestBuilding(lat, lng);
   damagePanel.setDamageInfo(lat, lng, waterDepth * 3.28084, flowState, nsiMatch);
 
@@ -219,7 +229,7 @@ function refreshDamagePanelForSelection() {
   }
 }
 
-async function handleBuildingClick(lat, lng, clickedElevation, presetBuildingName = null) {
+async function handleBuildingClick(lat, lng, clickedElevation) {
   const groundElev = waterRenderer.getGroundElevationAt(lat, lng);
   if (groundElev === null) return;
 
@@ -229,11 +239,18 @@ async function handleBuildingClick(lat, lng, clickedElevation, presetBuildingNam
   const staticDepth = waterSurface - groundElev;
   if (staticDepth <= 0) return;
 
+  // Only show damage if the solver actually has water at this cell.
+  // Prevents phantom damage reports at dry buildings that happen to sit
+  // below the water surface MSL but aren't connected to the flood.
+  if (!waterRenderer.isCellWet(lat, lng)) return;
+
   const flowState = waterRenderer.getFlowStateAt(lat, lng);
-  // Prefer the solver's own per-cell depth (accounts for local terrain
-  // variation within the flooded region) over the flat water-surface
-  // estimate, when a simulation has actually run here.
-  const waterDepth = (flowState && !flowState.stale) ? flowState.depth : staticDepth;
+  // Use the static equilibrium depth (water surface − building ground) for
+  // the damage report. The SWE solver's instantaneous h[r][c] reflects
+  // dynamic wave motion that may not have fully equilibrated, leading to
+  // under-reported depths at buildings near the origin. Flow state is still
+  // passed through for velocity and hazard classification.
+  const waterDepth = staticDepth;
   if (waterDepth <= 0) return;
 
   if (selectedBuildingMarker) {
@@ -279,7 +296,6 @@ async function handleBuildingClick(lat, lng, clickedElevation, presetBuildingNam
   }
 
   damagePanel.show();
-  damagePanel.setLoadingAddress();
   damagePanel.setDamageInfo(lat, lng, waterDepth * 3.28084, flowState, nsiMatch);
 
   // Prepare mitigation data (panel shown via toggle in damage panel)
@@ -287,26 +303,6 @@ async function handleBuildingClick(lat, lng, clickedElevation, presetBuildingNam
     mitigationPanel.setBuilding(waterDepth * 3.28084, nsiMatch, lat, lng);
     // Don't auto-show — user toggles via "Show Mitigation Analysis" button
     damagePanel._updateMitToggle();
-  }
-
-  let buildingName = presetBuildingName;
-
-  try {
-    const res = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json`);
-    const data = await res.json();
-
-    if (data && data.display_name) {
-      if (!buildingName && data.name) {
-        buildingName = data.name;
-      }
-
-      const address = data.display_name.split(',').slice(0, 3).join(', ');
-      damagePanel.setAddress(buildingName ? `${buildingName} (${address})` : address);
-    } else {
-      damagePanel.setAddress("Unknown Location");
-    }
-  } catch (e) {
-    damagePanel.setAddress(buildingName || "Location Unavailable");
   }
 }
 
@@ -487,7 +483,11 @@ function initUI() {
       }
     },
   });
-  mitigationPanel = new MitigationPanel({});
+  mitigationPanel = new MitigationPanel({
+    onClose: () => {
+      damagePanel._updateMitToggle();
+    },
+  });
   damagePanel.setMitigationPanel(mitigationPanel);
   infoPanel.setLocation(currentLocation.name);
 }

@@ -33,27 +33,36 @@ export class DamagePanel {
 
       <div id="damageContent">
         <div class="info-section">
-          <h4 class="section-heading">Building Information</h4>
-          <div class="info-row"><span class="info-label">Building ID:</span> <span class="info-value" id="damageBuildingId">Loading...</span></div>
-          <div class="info-row"><span class="info-label">Occupancy Type:</span> <span class="info-value" id="damageOccupancyType">GOV1</span></div>
-          <div class="info-row" id="damageSqftRow" style="display: none;"><span class="info-label">Square Footage:</span> <span class="info-value" id="damageSqft">—</span></div>
-          <div class="info-row"><span class="info-label">Address:</span> <span class="info-value" id="damageAddress">Loading...</span></div>
-          <div class="info-row"><span class="info-label">Coordinates:</span> <span class="info-value" id="damageCoords" style="font-family: monospace; font-size: 0.75rem;">—</span></div>
+          <h4 class="section-heading accordion-header" data-target="damageBuildingInfo">
+            Building Information <span class="accordion-arrow">&#9654;</span>
+          </h4>
+          <div class="accordion-content" id="damageBuildingInfo">
+            <div class="info-row"><span class="info-label">Occupancy Type:</span> <span class="info-value" id="damageOccupancyType">GOV1</span></div>
+            <div class="info-row" id="damageSqftRow" style="display: none;"><span class="info-label">Square Footage:</span> <span class="info-value" id="damageSqft">—</span></div>
+          </div>
         </div>
 
         <div class="info-section">
-          <h4 class="section-heading">Flood Conditions</h4>
-          <div class="info-row"><span class="info-label">Flood Depth:</span> <span class="info-value" id="damageFloodDepth">—</span></div>
-          <div class="info-row"><span class="info-label">Flow Velocity:</span> <span class="info-value" id="damageVelocity">—</span></div>
+          <h4 class="section-heading accordion-header" data-target="damageFloodCond">
+            Flood Conditions <span class="accordion-arrow">&#9654;</span>
+          </h4>
+          <div class="accordion-content" id="damageFloodCond">
+            <div class="info-row"><span class="info-label">Flood Depth:</span> <span class="info-value" id="damageFloodDepth">—</span></div>
+            <div class="info-row"><span class="info-label">Flow Velocity:</span> <span class="info-value" id="damageVelocity">—</span></div>
+          </div>
         </div>
 
         <div class="info-section">
-          <h4 class="section-heading">Damage Summary</h4>
-          <div class="info-row"><span class="info-label">Structural Loss:</span> <span class="info-value" id="damageStructuralLoss">—</span></div>
-          <div class="info-row"><span class="info-label">Content Loss:</span> <span class="info-value" id="damageContentLoss">—</span></div>
-          <div class="info-row" style="margin-top: 4px; border-top: 1px dashed rgba(255,255,255,0.06); padding-top: 4px;">
-            <span class="info-label" style="font-weight: 700;">Total Loss:</span>
-            <span class="info-value" id="damageTotalLoss" style="font-weight: 700; color: #ff6b6b;">—</span>
+          <h4 class="section-heading accordion-header" data-target="damageSummaryPanel">
+            Damage Summary <span class="accordion-arrow open">&#9654;</span>
+          </h4>
+          <div class="accordion-content open" id="damageSummaryPanel">
+            <div class="info-row"><span class="info-label">Structural Loss:</span> <span class="info-value" id="damageStructuralLoss">—</span></div>
+            <div class="info-row"><span class="info-label">Content Loss:</span> <span class="info-value" id="damageContentLoss">—</span></div>
+            <div class="info-row" style="margin-top: 4px; border-top: 1px dashed rgba(255,255,255,0.06); padding-top: 4px;">
+              <span class="info-label" style="font-weight: 700;">Total Loss:</span>
+              <span class="info-value" id="damageTotalLoss" style="font-weight: 700; color: #ff6b6b;">—</span>
+            </div>
           </div>
         </div>
 
@@ -89,6 +98,24 @@ export class DamagePanel {
         this._mitigationPanel.show();
       }
       this._updateMitToggle();
+    });
+
+    // Accordion functionality
+    const headers = this.panel.querySelectorAll('.accordion-header');
+    headers.forEach(header => {
+      header.addEventListener('click', () => {
+        const targetId = header.getAttribute('data-target');
+        const content = document.getElementById(targetId);
+        const arrow = header.querySelector('.accordion-arrow');
+        
+        if (content.classList.contains('open')) {
+          content.classList.remove('open');
+          arrow.classList.remove('open');
+        } else {
+          content.classList.add('open');
+          arrow.classList.add('open');
+        }
+      });
     });
   }
 
@@ -129,13 +156,7 @@ export class DamagePanel {
     this.show();
   }
 
-  setAddress(address) {
-    document.getElementById('damageAddress').textContent = address || "Unknown Address";
-  }
 
-  setLoadingAddress() {
-    document.getElementById('damageAddress').innerHTML = 'Fetching...';
-  }
 
   /**
    * @param {number} lat
@@ -150,11 +171,9 @@ export class DamagePanel {
     document.getElementById('damageNoDataMessage').style.display = 'none';
     document.getElementById('damageContent').style.display = 'block';
 
-    document.getElementById('damageCoords').textContent = `${lat.toFixed(5)}°, ${lng.toFixed(5)}°`;
     document.getElementById('damageFloodDepth').textContent = `${depthFt.toFixed(1)} ft`;
 
     const bId = Math.floor(Math.abs(lat * lng * 10000)) % 10000;
-    document.getElementById('damageBuildingId').textContent = bId;
 
     const occupancy = nsiMatch
       ? nsiMatch.occupancy

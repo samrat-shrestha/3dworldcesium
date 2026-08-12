@@ -19,11 +19,9 @@ export class MitigationPanel {
 
   _build() {
     this.panel.innerHTML = `
-      <div class="mitigation-header">
-        <div>
-          <div class="mitigation-header-title">Mitigation Analysis</div>
-          <div class="mitigation-header-sub">Estimate flood protection measures</div>
-        </div>
+      <div class="info-title">
+        <span>Mitigation Analysis</span>
+        <button class="damage-close-btn" id="mitigationCloseBtn">&times;</button>
       </div>
 
       <div id="mitigationPrompt" class="mitigation-prompt">
@@ -54,6 +52,12 @@ export class MitigationPanel {
         <div id="mitigationReport" style="display: none;"></div>
       </div>
     `;
+
+    // Close button
+    document.getElementById('mitigationCloseBtn').addEventListener('click', () => {
+      this.hide();
+      if (this.options.onClose) this.options.onClose();
+    });
 
     // Type selector change
     document.getElementById('mitTypeSelect').addEventListener('change', () => {
@@ -201,81 +205,107 @@ export class MitigationPanel {
           <span class="mit-report-title">${m.label}</span>
         </div>
 
-        <div class="mit-report-desc">${m.description}</div>
-
-        <!-- Before / After Comparison -->
-        <div class="mit-comparison">
-          <div class="mit-compare-side mit-compare-before">
-            <div class="mit-compare-heading">Without Mitigation</div>
-            <div class="mit-compare-amount">${fmt.format(m.baselineLoss)}</div>
-            <div class="mit-compare-bar-track">
-              <div class="mit-compare-bar-fill" style="width: 100%; background: #ff6b6b;"></div>
+        <!-- Before / After Comparison (Accordion) -->
+        <h4 class="section-heading accordion-header" data-target="mitComparison" style="margin-top: 16px;">
+          Impact Comparison <span class="accordion-arrow open">&#9654;</span>
+        </h4>
+        <div class="accordion-content open" id="mitComparison">
+          <div class="mit-comparison" style="margin-top: 4px;">
+            <div class="mit-compare-side mit-compare-before">
+              <div class="mit-compare-heading">Without Mitigation</div>
+              <div class="mit-compare-amount">${fmt.format(m.baselineLoss)}</div>
+              <div class="mit-compare-bar-track">
+                <div class="mit-compare-bar-fill" style="width: 100%; background: #ff6b6b;"></div>
+              </div>
             </div>
-          </div>
-          <div class="mit-compare-divider">→</div>
-          <div class="mit-compare-side mit-compare-after">
-            <div class="mit-compare-heading">With ${m.label}</div>
-            <div class="mit-compare-amount" style="color: var(--text-primary, #ddd);">${fmt.format(m.mitigatedLoss)}</div>
-            <div class="mit-compare-bar-track">
-              <div class="mit-compare-bar-fill" style="width: ${m.baselineLoss > 0 ? (m.mitigatedLoss / m.baselineLoss * 100) : 0}%; background: #63b3ed;"></div>
+            <div class="mit-compare-divider">→</div>
+            <div class="mit-compare-side mit-compare-after">
+              <div class="mit-compare-heading">With ${m.label}</div>
+              <div class="mit-compare-amount" style="color: var(--text-primary, #ddd);">${fmt.format(m.mitigatedLoss)}</div>
+              <div class="mit-compare-bar-track">
+                <div class="mit-compare-bar-fill" style="width: ${m.baselineLoss > 0 ? (m.mitigatedLoss / m.baselineLoss * 100) : 0}%; background: #63b3ed;"></div>
+              </div>
             </div>
           </div>
         </div>
 
-        <!-- Stats -->
-        <div class="mit-report-stats">
-          <div class="mit-stat-row">
-            <span class="mit-stat-label">Mitigation Cost</span>
-            <span class="mit-stat-value">${fmt.format(m.totalCost)}</span>
+        <!-- Stats & Breakdown (Accordion) -->
+        <h4 class="section-heading accordion-header" data-target="mitStats" style="margin-top: 16px;">
+          Financial Breakdown <span class="accordion-arrow">&#9654;</span>
+        </h4>
+        <div class="accordion-content" id="mitStats">
+          <div class="mit-report-stats" style="margin-top: 4px;">
+            <div class="mit-stat-row">
+              <span class="mit-stat-label">Mitigation Cost</span>
+              <span class="mit-stat-value">${fmt.format(m.totalCost)}</span>
+            </div>
+            <div class="mit-stat-row">
+              <span class="mit-stat-label">Damage Avoided</span>
+              <span class="mit-stat-value" style="color: #5cb85c;">${fmt.format(m.avoidedLoss)}</span>
+            </div>
+            <div class="mit-stat-row">
+              <span class="mit-stat-label">Damage Reduction</span>
+              <span class="mit-stat-value" style="color: #5cb85c;">${effectiveness.toFixed(0)}%</span>
+            </div>
+            <div class="mit-stat-row mit-stat-highlight">
+              <span class="mit-stat-label">Benefit-Cost Ratio</span>
+              <span class="mit-stat-value ${bcrClass}">${m.bcr.toFixed(2)}x</span>
+            </div>
+            ${m.lifeSpan ? `
+            <div class="mit-stat-row">
+              <span class="mit-stat-label">Life Span</span>
+              <span class="mit-stat-value">${m.lifeSpan} years</span>
+            </div>
+            ` : ''}
           </div>
-          <div class="mit-stat-row">
-            <span class="mit-stat-label">Damage Avoided</span>
-            <span class="mit-stat-value" style="color: #5cb85c;">${fmt.format(m.avoidedLoss)}</span>
+
+          <div class="mit-breakdown" style="margin-top: 12px;">
+            <div class="mit-breakdown-title">Loss Breakdown</div>
+            <div class="mit-breakdown-grid">
+              <div class="mit-breakdown-cell"></div>
+              <div class="mit-breakdown-cell mit-breakdown-head">Before</div>
+              <div class="mit-breakdown-cell mit-breakdown-head">After</div>
+
+              <div class="mit-breakdown-cell mit-breakdown-label">Structural</div>
+              <div class="mit-breakdown-cell">${fmt.format(m.structuralLossBefore)}</div>
+              <div class="mit-breakdown-cell">${fmt.format(m.structuralLossAfter)}</div>
+
+              <div class="mit-breakdown-cell mit-breakdown-label">Content</div>
+              <div class="mit-breakdown-cell">${fmt.format(m.contentLossBefore)}</div>
+              <div class="mit-breakdown-cell">${fmt.format(m.contentLossAfter)}</div>
+
+              <div class="mit-breakdown-cell mit-breakdown-label" style="font-weight: 700;">Total</div>
+              <div class="mit-breakdown-cell" style="font-weight: 700;">${fmt.format(m.baselineLoss)}</div>
+              <div class="mit-breakdown-cell" style="font-weight: 700;">${fmt.format(m.mitigatedLoss)}</div>
+            </div>
           </div>
-          <div class="mit-stat-row">
-            <span class="mit-stat-label">Damage Reduction</span>
-            <span class="mit-stat-value" style="color: #5cb85c;">${effectiveness.toFixed(0)}%</span>
-          </div>
-          <div class="mit-stat-row mit-stat-highlight">
-            <span class="mit-stat-label">Benefit-Cost Ratio</span>
-            <span class="mit-stat-value ${bcrClass}">${m.bcr.toFixed(2)}x</span>
-          </div>
-          ${m.lifeSpan ? `
-          <div class="mit-stat-row">
-            <span class="mit-stat-label">Life Span</span>
-            <span class="mit-stat-value">${m.lifeSpan} years</span>
-          </div>` : ''}
         </div>
 
         ${m.restrictions ? `
-        <div class="mit-restrictions">
+        <div class="mit-restrictions" style="margin-top: 16px;">
           <div class="mit-restrictions-label">⚠ Restrictions</div>
           <div class="mit-restrictions-text">${m.restrictions}</div>
         </div>` : ''}
-
-        <!-- Breakdown -->
-        <div class="mit-breakdown">
-          <div class="mit-breakdown-title">Loss Breakdown</div>
-          <div class="mit-breakdown-grid">
-            <div class="mit-breakdown-cell"></div>
-            <div class="mit-breakdown-cell mit-breakdown-head">Before</div>
-            <div class="mit-breakdown-cell mit-breakdown-head">After</div>
-
-            <div class="mit-breakdown-cell mit-breakdown-label">Structural</div>
-            <div class="mit-breakdown-cell">${fmt.format(m.structuralLossBefore)}</div>
-            <div class="mit-breakdown-cell">${fmt.format(m.structuralLossAfter)}</div>
-
-            <div class="mit-breakdown-cell mit-breakdown-label">Content</div>
-            <div class="mit-breakdown-cell">${fmt.format(m.contentLossBefore)}</div>
-            <div class="mit-breakdown-cell">${fmt.format(m.contentLossAfter)}</div>
-
-            <div class="mit-breakdown-cell mit-breakdown-label" style="font-weight: 700;">Total</div>
-            <div class="mit-breakdown-cell" style="font-weight: 700;">${fmt.format(m.baselineLoss)}</div>
-            <div class="mit-breakdown-cell" style="font-weight: 700;">${fmt.format(m.mitigatedLoss)}</div>
-          </div>
-        </div>
       </div>
     `;
+
+    // Add accordion click listeners for the dynamically generated report
+    const headers = report.querySelectorAll('.accordion-header');
+    headers.forEach(header => {
+      header.addEventListener('click', () => {
+        const targetId = header.getAttribute('data-target');
+        const content = document.getElementById(targetId);
+        const arrow = header.querySelector('.accordion-arrow');
+        
+        if (content.classList.contains('open')) {
+          content.classList.remove('open');
+          arrow.classList.remove('open');
+        } else {
+          content.classList.add('open');
+          arrow.classList.add('open');
+        }
+      });
+    });
 
     // Fire callback (no 3D rendering anymore, just report)
     if (this.options.onMitigationSelect) {

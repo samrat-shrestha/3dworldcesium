@@ -47,7 +47,7 @@ export class Controls {
   _build() {
     this.panel.innerHTML = `
       <div class="panel-header">
-        <h2>HydroViz 3D — New Orleans</h2>
+        <h2><span class="brand-accent">Hydro</span>Viz <span class="brand-3d">3D</span></h2>
       </div>
       <div class="panel-body">
 
@@ -160,6 +160,17 @@ export class Controls {
                 <span class="section-value" id="waterLevelDisplay">0.0 ft</span>
               </div>
               <input type="range" id="waterLevelSlider" min="0" max="60" step="0.5" value="0">
+            </div>
+
+            <!-- Simulation Progress -->
+            <div id="simProgressContainer" class="sim-progress-container" style="display: none;">
+              <div class="sim-progress-header">
+                <span class="sim-progress-label" id="simProgressLabel">Simulating flood...</span>
+                <span class="sim-progress-pct" id="simProgressPct">0%</span>
+              </div>
+              <div class="sim-progress-track">
+                <div class="sim-progress-fill" id="simProgressFill" style="width: 0%;"></div>
+              </div>
             </div>
 
             <!-- Water Surface -->
@@ -357,5 +368,64 @@ export class Controls {
 
   show() {
     this.panel.style.display = 'block';
+  }
+
+  /**
+   * Enable or disable the water level slider.
+   * @param {boolean} enabled
+   */
+  setWaterSliderEnabled(enabled) {
+    const slider = document.getElementById('waterLevelSlider');
+    if (slider) {
+      slider.disabled = !enabled;
+      slider.style.opacity = enabled ? '1' : '0.4';
+      slider.style.pointerEvents = enabled ? 'auto' : 'none';
+    }
+  }
+
+  /**
+   * Show the simulation progress indicator.
+   * @param {string} [label] - optional label text
+   */
+  showSimulationProgress(label) {
+    const container = document.getElementById('simProgressContainer');
+    const labelEl = document.getElementById('simProgressLabel');
+    const pctEl = document.getElementById('simProgressPct');
+    const fillEl = document.getElementById('simProgressFill');
+    if (container) container.style.display = 'block';
+    if (labelEl) labelEl.textContent = label || 'Simulating flood...';
+    if (pctEl) pctEl.textContent = '0%';
+    if (fillEl) fillEl.style.width = '0%';
+  }
+
+  /**
+   * Update the simulation progress bar.
+   * @param {number} progress - 0 to 1
+   */
+  updateSimulationProgress(progress) {
+    const pct = Math.min(Math.round(progress * 100), 100);
+    const pctEl = document.getElementById('simProgressPct');
+    const fillEl = document.getElementById('simProgressFill');
+    if (pctEl) pctEl.textContent = `${pct}%`;
+    if (fillEl) fillEl.style.width = `${pct}%`;
+  }
+
+  /**
+   * Hide the simulation progress indicator.
+   */
+  hideSimulationProgress() {
+    const container = document.getElementById('simProgressContainer');
+    const labelEl = document.getElementById('simProgressLabel');
+    const pctEl = document.getElementById('simProgressPct');
+    const fillEl = document.getElementById('simProgressFill');
+
+    // Brief "complete" flash
+    if (labelEl) labelEl.textContent = 'Simulation complete';
+    if (pctEl) pctEl.textContent = '100%';
+    if (fillEl) fillEl.style.width = '100%';
+
+    setTimeout(() => {
+      if (container) container.style.display = 'none';
+    }, 1200);
   }
 }
