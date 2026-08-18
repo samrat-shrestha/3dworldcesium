@@ -10,14 +10,14 @@
 import * as Cesium from 'cesium';
 import 'cesium/Build/Cesium/Widgets/widgets.css';
 import './styles/index.css';
+import { createFloatingLogo } from 'nextgen-floating-logo-widget';
 
 import { initViewer, flyToPreset } from './viewer.js';
 import { loadGoogleTiles } from './tiles.js';
 import { WaterRenderer } from './water/WaterRenderer.js';
 import { ElevationService } from './services/ElevationService.js';
 import { Controls, LOCATIONS } from './ui/Controls.js';
-import { InfoPanel } from './ui/InfoPanel.js';
-import { DamagePanel } from './ui/DamagePanel.js';
+import { ReportPanel } from './ui/ReportPanel.js';
 import { getSavedToken, showTokenModal } from './ui/TokenModal.js';
 import { FirstPersonControls } from './navigation/FirstPersonControls.js';
 import { FloatingDebrisManager } from './water/FloatingDebrisManager.js';
@@ -25,23 +25,18 @@ import { loadNSIData, findNearestBuilding } from './services/NSIService.js';
 import { loadCurvesData } from './data/DepthDamageCurves.js';
 import { loadMitigationData } from './data/MitigationService.js';
 
-import { MitigationPanel } from './ui/MitigationPanel.js';
-
 // ─── State ───────────────────────────────────────────────────
 let viewer = null;
 let elevationService = null;
 let waterRenderer = null;
 let controls = null;
-let infoPanel = null;
-let damagePanel = null;
+let reportPanel = null;
 let fpControls = null;
 let clickHandler = null;
 let debrisManager = null;
 let currentLocation = LOCATIONS[0]; // French Quarter
 let currentViewPreset = 'aerial';
 let previewTimeout = null; // auto-hide timer for region size preview
-
-let mitigationPanel = null;
 
 // ─── Boot ────────────────────────────────────────────────────
 async function boot() {
@@ -63,7 +58,7 @@ async function boot() {
         controls.hideSimulationProgress();
         controls.setWaterSliderEnabled(true);
       }
-      if (damagePanel && !selectedBuilding) damagePanel.showPrompt();
+      if (reportPanel && !selectedBuilding) reportPanel.showDamagePrompt();
     };
 
     // Show progress bar when flood animation starts
@@ -98,8 +93,12 @@ async function boot() {
 
     showLoading(false);
     controls.show();
-    infoPanel.show();
-    document.getElementById('brandBadge').style.display = 'flex';
+    reportPanel.show();
+    createFloatingLogo({
+      url: 'https://hydroinformatics.tulane.edu',
+      position: 'bottom-left',
+      size: 64,
+    }).mount();
 
     console.log('[HydroViz] Application initialized — New Orleans');
   } catch (error) {
@@ -147,7 +146,7 @@ function initClickHandler() {
         controls.setElevationLoading(true);
         waterRenderer.clearWaterOnly();
         selectedBuilding = null;
-        if (damagePanel) damagePanel.hide();
+        if (reportPanel) reportPanel.clearBuilding();
         if (selectedBuildingMarker) {
           viewer.entities.remove(selectedBuildingMarker);
           selectedBuildingMarker = null;
@@ -168,15 +167,15 @@ function initClickHandler() {
 
         controls.setOrigin(origin);
         controls.setGroundElevation(groundNavd88);
-        infoPanel.setOrigin(origin);
-        infoPanel.setGroundElevation(groundNavd88);
+        reportPanel.setOrigin(origin);
+        reportPanel.setGroundElevation(groundNavd88);
 
         // If water level is already set, animate water spreading from new origin
         if (controls.currentLevel > 0) {
           waterRenderer.animateFloodFill(controls.currentLevel, controls.currentRadius);
           const surfaceNavd88 = waterRenderer.getWaterSurfaceNavd88();
           controls.setWaterSurface(surfaceNavd88);
-          infoPanel.setWaterSurface(surfaceNavd88);
+          reportPanel.setWaterSurface(surfaceNavd88);
           debrisManager.updateWaterLevel(waterRenderer.getWaterSurfaceElevation());
         } else {
           debrisManager.updateWaterLevel(Number.NEGATIVE_INFINITY);
@@ -196,7 +195,7 @@ let selectedBuilding = null; // { lat, lng } of the building shown in the panel
  * address hasn't changed, and re-fetching on every slider move would
  * hammer Nominatim.
  */
-function refreshDamagePanelForSelection() {
+function refreshReportPanelForSelection() {
   if (!selectedBuilding) return;
   const { lat, lng } = selectedBuilding;
 
@@ -207,8 +206,7 @@ function refreshDamagePanelForSelection() {
   const staticDepth = waterSurface - groundElev;
   if (!waterRenderer.isCellWet(lat, lng) || staticDepth <= 0) {
     // This building is dry at the new level — the panel no longer applies.
-    damagePanel.hide();
-    if (mitigationPanel) mitigationPanel.hide();
+    if (reportPanel) reportPanel.clearBuilding();
     selectedBuilding = null;
     if (selectedBuildingMarker) {
       viewer.entities.remove(selectedBuildingMarker);
@@ -221,11 +219,11 @@ function refreshDamagePanelForSelection() {
   const waterDepth = staticDepth;
 
   const nsiMatch = findNearestBuilding(lat, lng);
-  damagePanel.setDamageInfo(lat, lng, waterDepth * 3.28084, flowState, nsiMatch);
-
-  // Refresh mitigation panel if visible
-  if (mitigationPanel && nsiMatch) {
-    mitigationPanel.setBuilding(waterDepth * 3.28084, nsiMatch, lat, lng);
+  if (reportPanel) {
+    reportPanel.setDamageInfo(lat, lng, waterDepth * 3.28084, flowState, nsiMatch);
+    if (nsiMatch) {
+      reportPanel.setMitigationBuilding(waterDepth * 3.28084, nsiMatch, lat, lng);
+    }
   }
 }
 
@@ -290,20 +288,13 @@ async function handleBuildingClick(lat, lng, clickedElevation) {
 
   // If no NSI data exists for this building, show the no-data message
   if (!nsiMatch) {
-    damagePanel.showNoData(lat, lng);
-    if (mitigationPanel) mitigationPanel.hide();
+    reportPanel.showDamageNoData(lat, lng);
+    reportPanel.showMitigationPrompt();
     return;
   }
 
-  damagePanel.show();
-  damagePanel.setDamageInfo(lat, lng, waterDepth * 3.28084, flowState, nsiMatch);
-
-  // Prepare mitigation data (panel shown via toggle in damage panel)
-  if (mitigationPanel) {
-    mitigationPanel.setBuilding(waterDepth * 3.28084, nsiMatch, lat, lng);
-    // Don't auto-show — user toggles via "Show Mitigation Analysis" button
-    damagePanel._updateMitToggle();
-  }
+  reportPanel.setDamageInfo(lat, lng, waterDepth * 3.28084, flowState, nsiMatch);
+  reportPanel.setMitigationBuilding(waterDepth * 3.28084, nsiMatch, lat, lng);
 }
 
 function initUI() {
@@ -318,22 +309,21 @@ function initUI() {
     onWaterLevelChange: (level) => {
       if (!waterRenderer.hasOrigin()) return;
       waterRenderer.updateWater(level, controls.currentRadius);
-      infoPanel.setWaterLevel(level);
-      infoPanel.setFloodArea(waterRenderer.getEstimatedArea());
+      reportPanel.setWaterLevel(level);
+      reportPanel.setFloodArea(waterRenderer.getEstimatedArea());
       const surfaceNavd88 = waterRenderer.getWaterSurfaceNavd88();
       controls.setWaterSurface(surfaceNavd88);
-      infoPanel.setWaterSurface(surfaceNavd88);
+      reportPanel.setWaterSurface(surfaceNavd88);
       debrisManager.updateWaterLevel(waterRenderer.getWaterSurfaceElevation());
 
       if (level > 0) {
         // If a building is already selected, refresh its panel with new depth
         if (selectedBuilding) {
-          refreshDamagePanelForSelection();
+          refreshReportPanelForSelection();
         }
       } else {
         selectedBuilding = null;
-        if (damagePanel) damagePanel.hide();
-        if (mitigationPanel) mitigationPanel.hide();
+        if (reportPanel) reportPanel.clearBuilding();
         if (selectedBuildingMarker) {
           viewer.entities.remove(selectedBuildingMarker);
           selectedBuildingMarker = null;
@@ -375,12 +365,12 @@ function initUI() {
       }
       if (controls.currentLevel <= 0) return;
       waterRenderer.updateWater(controls.currentLevel, radius);
-      infoPanel.setFloodArea(waterRenderer.getEstimatedArea());
+      reportPanel.setFloodArea(waterRenderer.getEstimatedArea());
     },
 
     onFlyTo: (location) => {
       currentLocation = location;
-      infoPanel.setLocation(location.name);
+      reportPanel.setLocation(location.name);
 
       // Disable walk mode when flying
       if (fpControls.enabled) {
@@ -439,11 +429,11 @@ function initUI() {
 
       await waterRenderer.animateRise(level, 3000, (currentLevel) => {
         controls.setWaterLevelDisplay(currentLevel);
-        infoPanel.setWaterLevel(currentLevel);
-        infoPanel.setFloodArea(waterRenderer.getEstimatedArea());
+        reportPanel.setWaterLevel(currentLevel);
+        reportPanel.setFloodArea(waterRenderer.getEstimatedArea());
         const surfaceNavd88 = waterRenderer.getWaterSurfaceNavd88();
         controls.setWaterSurface(surfaceNavd88);
-        infoPanel.setWaterSurface(surfaceNavd88);
+        reportPanel.setWaterSurface(surfaceNavd88);
 
         // Pass smooth current level to debris manager
         const surfaceEllipsoid = waterRenderer.getGroundElevation() + currentLevel;
@@ -451,7 +441,7 @@ function initUI() {
       });
 
       // Show the damage panel with a prompt to click on buildings
-      if (damagePanel) damagePanel.showPrompt();
+      if (reportPanel) reportPanel.showDamagePrompt();
     },
 
     onClear: () => {
@@ -460,13 +450,12 @@ function initUI() {
 
       selectedBuilding = null;
       debrisManager.updateWaterLevel(Number.NEGATIVE_INFINITY);
-      infoPanel.setWaterLevel(0);
-      infoPanel.setFloodArea(0);
-      infoPanel.setWaterSurface(null);
-      infoPanel.setOrigin(null);
-      infoPanel.setGroundElevation(null);
-      if (damagePanel) damagePanel.hide();
-      if (mitigationPanel) mitigationPanel.hide();
+      reportPanel.setWaterLevel(0);
+      reportPanel.setFloodArea(0);
+      reportPanel.setWaterSurface(null);
+      reportPanel.setOrigin(null);
+      reportPanel.setGroundElevation(null);
+      reportPanel.clearBuilding();
       if (selectedBuildingMarker) {
         viewer.entities.remove(selectedBuildingMarker);
         selectedBuildingMarker = null;
@@ -474,8 +463,7 @@ function initUI() {
     },
   });
 
-  infoPanel = new InfoPanel(viewer);
-  damagePanel = new DamagePanel(viewer, {
+  reportPanel = new ReportPanel(viewer, {
     onClose: () => {
       if (selectedBuildingMarker) {
         viewer.entities.remove(selectedBuildingMarker);
@@ -483,13 +471,7 @@ function initUI() {
       }
     },
   });
-  mitigationPanel = new MitigationPanel({
-    onClose: () => {
-      damagePanel._updateMitToggle();
-    },
-  });
-  damagePanel.setMitigationPanel(mitigationPanel);
-  infoPanel.setLocation(currentLocation.name);
+  reportPanel.setLocation(currentLocation.name);
 }
 
 // ─── Loading / Error ─────────────────────────────────────────

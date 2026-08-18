@@ -9,7 +9,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "cesium": "^1.120.0"
+    "cesium": "^1.120.0",
+    "nextgen-floating-logo-widget": "github:uihilab/nextgen-floating-logo-widget"
   },
   "devDependencies": {
     "vite": "^6.0.0",

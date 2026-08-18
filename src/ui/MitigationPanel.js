@@ -39,13 +39,15 @@ export class MitigationPanel {
           </div>
           <div class="mit-form-group">
             <label class="mit-form-label">Design Level</label>
-            <select id="mitDesignSelect" class="mit-select" disabled>
-              <option value="">— Select design —</option>
-            </select>
+            <div class="mit-design-row">
+              <select id="mitDesignSelect" class="mit-select" disabled>
+                <option value="">— Select design —</option>
+              </select>
+              <button id="mitEstimateBtn" class="mit-estimate-btn" disabled>
+                Estimate
+              </button>
+            </div>
           </div>
-          <button id="mitEstimateBtn" class="mit-estimate-btn" disabled>
-            Estimate Mitigation
-          </button>
         </div>
 
         <!-- Report (hidden until estimated) -->
@@ -84,7 +86,7 @@ export class MitigationPanel {
       this.panel.classList.add('mit-panel-visible');
     });
   }
-  
+
   hide() {
     this._visible = false;
     this.panel.classList.remove('mit-panel-visible');
@@ -94,7 +96,7 @@ export class MitigationPanel {
     }, 300);
     this._selectedMitigation = null;
   }
-  
+
   isVisible() { return this._visible; }
 
   showPrompt() {
@@ -170,7 +172,8 @@ export class MitigationPanel {
     }
 
     // Get available design levels for this type
-    const options = this._mitigations.filter(m => m.mid === selectedMid);
+    const options = this._mitigations.filter(m => m.mid === selectedMid)
+      .sort((a, b) => a.designFt - b.designFt);
     designSelect.innerHTML = '<option value="">— Select level —</option>';
 
     for (const m of options) {
@@ -201,13 +204,9 @@ export class MitigationPanel {
     report.style.display = 'block';
     report.innerHTML = `
       <div class="mit-report">
-        <div class="mit-report-header">
-          <span class="mit-report-title">${m.label}</span>
-        </div>
-
         <!-- Before / After Comparison (Accordion) -->
         <h4 class="section-heading accordion-header" data-target="mitComparison" style="margin-top: 16px;">
-          Impact Comparison <span class="accordion-arrow open">&#9654;</span>
+          Impact Comparison <span class="accordion-arrow open"></span>
         </h4>
         <div class="accordion-content open" id="mitComparison">
           <div class="mit-comparison" style="margin-top: 4px;">
@@ -220,7 +219,7 @@ export class MitigationPanel {
             </div>
             <div class="mit-compare-divider">→</div>
             <div class="mit-compare-side mit-compare-after">
-              <div class="mit-compare-heading">With ${m.label}</div>
+              <div class="mit-compare-heading">With Mitigation</div>
               <div class="mit-compare-amount" style="color: var(--text-primary, #ddd);">${fmt.format(m.mitigatedLoss)}</div>
               <div class="mit-compare-bar-track">
                 <div class="mit-compare-bar-fill" style="width: ${m.baselineLoss > 0 ? (m.mitigatedLoss / m.baselineLoss * 100) : 0}%; background: #63b3ed;"></div>
@@ -229,9 +228,9 @@ export class MitigationPanel {
           </div>
         </div>
 
-        <!-- Stats & Breakdown (Accordion) -->
+        <!-- Stats (Accordion) -->
         <h4 class="section-heading accordion-header" data-target="mitStats" style="margin-top: 16px;">
-          Financial Breakdown <span class="accordion-arrow">&#9654;</span>
+          Financial Breakdown <span class="accordion-arrow"></span>
         </h4>
         <div class="accordion-content" id="mitStats">
           <div class="mit-report-stats" style="margin-top: 4px;">
@@ -258,9 +257,14 @@ export class MitigationPanel {
             </div>
             ` : ''}
           </div>
+        </div>
 
-          <div class="mit-breakdown" style="margin-top: 12px;">
-            <div class="mit-breakdown-title">Loss Breakdown</div>
+        <!-- Loss Breakdown (Accordion) -->
+        <h4 class="section-heading accordion-header" data-target="mitLossBreakdown" style="margin-top: 16px;">
+          Loss Breakdown <span class="accordion-arrow"></span>
+        </h4>
+        <div class="accordion-content" id="mitLossBreakdown">
+          <div class="mit-breakdown" style="margin-top: 4px;">
             <div class="mit-breakdown-grid">
               <div class="mit-breakdown-cell"></div>
               <div class="mit-breakdown-cell mit-breakdown-head">Before</div>
@@ -296,7 +300,7 @@ export class MitigationPanel {
         const targetId = header.getAttribute('data-target');
         const content = document.getElementById(targetId);
         const arrow = header.querySelector('.accordion-arrow');
-        
+
         if (content.classList.contains('open')) {
           content.classList.remove('open');
           arrow.classList.remove('open');

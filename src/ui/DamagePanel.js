@@ -34,7 +34,7 @@ export class DamagePanel {
       <div id="damageContent">
         <div class="info-section">
           <h4 class="section-heading accordion-header" data-target="damageBuildingInfo">
-            Building Information <span class="accordion-arrow">&#9654;</span>
+            Building Information <span class="accordion-arrow"></span>
           </h4>
           <div class="accordion-content" id="damageBuildingInfo">
             <div class="info-row"><span class="info-label">Occupancy Type:</span> <span class="info-value" id="damageOccupancyType">GOV1</span></div>
@@ -44,7 +44,7 @@ export class DamagePanel {
 
         <div class="info-section">
           <h4 class="section-heading accordion-header" data-target="damageFloodCond">
-            Flood Conditions <span class="accordion-arrow">&#9654;</span>
+            Flood Conditions <span class="accordion-arrow"></span>
           </h4>
           <div class="accordion-content" id="damageFloodCond">
             <div class="info-row"><span class="info-label">Flood Depth:</span> <span class="info-value" id="damageFloodDepth">—</span></div>
@@ -54,7 +54,7 @@ export class DamagePanel {
 
         <div class="info-section">
           <h4 class="section-heading accordion-header" data-target="damageSummaryPanel">
-            Damage Summary <span class="accordion-arrow open">&#9654;</span>
+            Damage Summary <span class="accordion-arrow open"></span>
           </h4>
           <div class="accordion-content open" id="damageSummaryPanel">
             <div class="info-row"><span class="info-label">Structural Loss:</span> <span class="info-value" id="damageStructuralLoss">—</span></div>
@@ -231,10 +231,14 @@ export class DamagePanel {
     const descEl = document.getElementById('damageSeverityDesc');
 
     severityEl.textContent = `${hazard.code} — ${hazard.label}`;
-    severityEl.style.backgroundColor = `${hazard.color}33`;
-    severityEl.style.color = hazard.color;
-    severityEl.style.border = `1px solid ${hazard.color}55`;
+    severityEl.style.backgroundColor = hazard.color;
+    // Use dark text for lighter hazard colors (H1–H3), white for darker (H4–H6)
+    const useDarkText = ['H1', 'H2', 'H3'].includes(hazard.code);
+    severityEl.style.color = useDarkText ? '#1a1a2e' : '#fff';
+    severityEl.style.border = `1px solid ${hazard.color}`;
+    severityEl.style.textShadow = useDarkText ? 'none' : '0 1px 2px rgba(0,0,0,0.3)';
     descEl.textContent = hazard.description;
+    descEl.style.color = 'var(--text-primary, #ccc)';
 
     // ─── Assumptions footnote ───
     const assumptionsEl = document.getElementById('damageAssumptions');
